@@ -17,7 +17,9 @@ const PORT = Number(process.env.PORT || 3001)
 const HOST = process.env.HOST || '0.0.0.0'
 const ROUND_DURATION_MS = 80_000
 const INTERMISSION_MS = 4_000
+const MIN_ROUNDS = 2
 const MAX_ROUNDS = 6
+const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
 const MAX_MESSAGES = 40
 const rooms = new Map()
 
@@ -70,6 +72,17 @@ function createMessage(type, sender, text) {
   }
 }
 
+function createWordDeck() {
+  const deck = [...WORDS]
+
+  for (let index = deck.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[deck[index], deck[swapIndex]] = [deck[swapIndex], deck[index]]
+  }
+
+  return deck
+}
+
 function normalizeText(value) {
   return String(value || '')
     .toLowerCase()
@@ -83,8 +96,12 @@ function maskWord(word) {
     .join('')
 }
 
-function pickWord() {
-  return WORDS[Math.floor(Math.random() * WORDS.length)]
+function pickWord(room) {
+  if (!room.wordDeck.length) {
+    room.wordDeck = createWordDeck()
+  }
+
+  return room.wordDeck.pop() || WORDS[0] || '정답'
 }
 
 function getRoom(roomCode) {
@@ -103,6 +120,7 @@ function getRoom(roomCode) {
       segments: [],
       roundEndsAt: null,
       nextRoundAt: null,
+      wordDeck: createWordDeck(),
       players: [],
     })
   }
@@ -116,6 +134,11 @@ function getPlayer(room, playerId) {
 
 function pushSystemMessage(room, text) {
   room.messages.push(createMessage('system', '시스템', text))
+  room.messages = room.messages.slice(-MAX_MESSAGES)
+}
+
+function pushCorrectMessage(room, winner, word) {
+  room.messages.push(createMessage('correct', '정답', `${winner} 님이 ${word}를 맞혔습니다!`))
   room.messages = room.messages.slice(-MAX_MESSAGES)
 }
 
@@ -173,6 +196,7 @@ function resetToLobby(room, message) {
   room.segments = []
   room.roundEndsAt = null
   room.nextRoundAt = null
+  room.wordDeck = createWordDeck()
   emitCanvasState(room)
   emitRoomState(room)
 }
@@ -206,7 +230,7 @@ function beginRound(room) {
 
   room.round += 1
   room.drawerId = nextDrawer.id
-  room.word = pickWord()
+  room.word = pickWord(room)
   room.phase = 'drawing'
   room.timeLeft = Math.ceil(ROUND_DURATION_MS / 1000)
   room.resultText = `${nextDrawer.nickname} 님이 그림을 그리는 중입니다.`
@@ -243,6 +267,10 @@ function finishRound(room, winnerId, reason) {
         ? `그리는 사람이 나가서 라운드가 종료됐습니다. 제시어는 \"${room.word}\"였습니다.`
         : `시간 종료. 제시어는 \"${room.word}\"였습니다.`
 
+  if (winner && drawer) {
+    pushCorrectMessage(room, winner.nickname, room.word)
+  }
+
   pushSystemMessage(room, room.resultText)
   emitRoomState(room)
 }
@@ -256,6 +284,7 @@ function startGame(room) {
   room.round = 0
   room.drawerId = null
   room.resultText = '새 게임을 준비 중입니다.'
+  room.wordDeck = createWordDeck()
   beginRound(room)
 }
 
@@ -334,6 +363,24 @@ io.on('connection', (socket) => {
     }
 
     startGame(room)
+  })
+
+  socket.on('setMaxRounds', (nextValue) => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby') {
+      return
+    }
+
+    const parsedValue = Number(nextValue)
+
+    if (!ROUND_OPTIONS.includes(parsedValue)) {
+      return
+    }
+
+    room.maxRounds = Math.max(MIN_ROUNDS, Math.min(10, parsedValue))
+    room.resultText = `호스트가 총 ${room.maxRounds}라운드로 설정했습니다.`
+    emitRoomState(room)
   })
 
   socket.on('sendMessage', (rawText) => {

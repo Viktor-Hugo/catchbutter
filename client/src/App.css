@@ -156,6 +156,43 @@ input:focus {
   gap: 14px;
 }
 
+.result-banner {
+  display: grid;
+  gap: 6px;
+  border-radius: 20px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(20, 30, 45, 0.08);
+}
+
+.result-banner strong {
+  font-size: 0.84rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.result-banner span {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.result-banner.correct {
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.28), rgba(249, 115, 22, 0.18));
+  border-color: rgba(249, 115, 22, 0.2);
+  box-shadow: 0 14px 28px rgba(249, 115, 22, 0.12);
+}
+
+.result-banner.correct strong,
+.result-banner.correct span {
+  color: #9a3412;
+}
+
+.result-banner.round-end {
+  background: rgba(15, 118, 110, 0.12);
+}
+
 .board-header,
 .panel-header,
 .tool-row {
@@ -276,18 +313,23 @@ input:focus {
   outline-offset: 3px;
 }
 
-.side-column {
-  display: grid;
-  gap: 18px;
-}
-
-.player-card {
-  order: 2;
-}
-
 .panel-card {
   display: grid;
   gap: 12px;
+}
+
+.round-config-card {
+  display: grid;
+  gap: 10px;
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.round-option-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .player-list {
@@ -352,6 +394,16 @@ input:focus {
   background: rgba(15, 118, 110, 0.1);
 }
 
+.message-bubble.correct {
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.3), rgba(249, 115, 22, 0.2));
+  border: 1px solid rgba(249, 115, 22, 0.18);
+}
+
+.message-bubble.correct strong,
+.message-bubble.correct p {
+  color: #9a3412;
+}
+
 .chat-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -372,6 +424,21 @@ input:focus {
   .game-grid {
     grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.75fr);
     align-items: start;
+  }
+
+   .board-card {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+
+  .player-card {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .chat-card {
+    grid-column: 2;
+    grid-row: 2;
   }
 }
 
@@ -399,6 +466,22 @@ input:focus {
     border-radius: 20px;
   }
 
+  .board-card {
+    grid-template-columns: 1fr;
+  }
+
+  .board-header {
+    order: 1;
+  }
+
+  .toolbar-card {
+    order: 2;
+  }
+
+  .canvas-stage {
+    order: 3;
+  }
+
   .chat-form,
   .room-code-row {
     grid-template-columns: 1fr;
@@ -417,6 +500,7 @@ input:focus {
   }
 
   .tool-chip-grid,
+  .round-option-grid,
   .size-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -428,14 +512,6 @@ input:focus {
   .board-header,
   .panel-header {
     align-items: flex-start;
-  }
-
-  .chat-card {
-    order: 1;
-  }
-
-  .player-card {
-    order: 2;
   }
 
   .message-list {

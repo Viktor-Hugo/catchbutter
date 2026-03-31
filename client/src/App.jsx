@@ -17,6 +17,7 @@ const PALETTE = [
   '#7c2d12',
 ]
 const BRUSHES = [4, 8, 12, 18]
+const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
 
 const initialRoomCode = (() => {
   const roomFromQuery = new URLSearchParams(window.location.search).get('room')
@@ -68,6 +69,18 @@ function getPhaseLabel(phase) {
   }
 
   return '로비'
+}
+
+function getResultTone(game) {
+  if (game.phase === 'round-end' && game.resultText.includes('정답!')) {
+    return 'correct'
+  }
+
+  if (game.phase === 'round-end') {
+    return 'round-end'
+  }
+
+  return 'default'
 }
 
 function hexToRgba(hexColor) {
@@ -227,6 +240,7 @@ function App() {
 
   const joined = Boolean(game.roomCode)
   const canDraw = joined && game.phase === 'drawing' && game.drawerId === game.meId
+  const resultTone = getResultTone(game)
   const shareUrl = game.roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${game.roomCode}`
     : `${window.location.origin}${window.location.pathname}`
@@ -520,9 +534,13 @@ function App() {
               </div>
               <div className="pill-group">
                 <span className="status-pill">{game.drawerName} 그림 차례</span>
-                <span className="status-pill accent">{game.resultText}</span>
               </div>
             </header>
+
+            <div className={`result-banner ${resultTone}`}>
+              <strong>{game.phase === 'round-end' && game.resultText.includes('정답!') ? '정답 맞힘' : '안내'}</strong>
+              <span>{game.resultText}</span>
+            </div>
 
             <div className="canvas-stage" ref={stageRef}>
               <canvas
@@ -620,61 +638,80 @@ function App() {
             </div>
           </article>
 
-          <aside className="side-column">
-            <article className="panel-card player-card">
-              <div className="panel-header">
-                <h3>플레이어</h3>
-                {game.canStart ? (
-                  <button type="button" className="primary-button" onClick={() => socketRef.current?.emit('startGame')}>
-                    게임 시작
-                  </button>
-                ) : null}
-              </div>
+          <article className="panel-card chat-card">
+            <div className="panel-header">
+              <h3>채팅 / 정답</h3>
+              <span className="muted-line">{connectionLabel}</span>
+            </div>
 
-              <ul className="player-list">
-                {game.players.map((player) => (
-                  <li key={player.id} className={player.isMe ? 'player-row self' : 'player-row'}>
-                    <div>
-                      <strong>{player.nickname}</strong>
-                      <span>
-                        {player.isHost ? '호스트' : '플레이어'}
-                        {player.id === game.drawerId ? ' · 그리는 중' : ''}
-                      </span>
-                    </div>
-                    <b>{player.score}</b>
-                  </li>
-                ))}
-              </ul>
-            </article>
+            <div className="message-list" ref={messagesRef}>
+              {game.messages.map((message) => (
+                <div key={message.id} className={`message-bubble ${message.type}`}>
+                  <strong>{message.sender}</strong>
+                  <p>{message.text}</p>
+                </div>
+              ))}
+            </div>
 
-            <article className="panel-card chat-card">
-              <div className="panel-header">
-                <h3>채팅 / 정답</h3>
-                <span className="muted-line">{connectionLabel}</span>
-              </div>
+            <form className="chat-form" onSubmit={handleMessageSubmit}>
+              <input
+                value={draftMessage}
+                onChange={(event) => setDraftMessage(event.target.value)}
+                placeholder={canDraw ? '채팅으로 힌트를 주지는 마세요' : '정답 또는 채팅 입력'}
+                maxLength={80}
+              />
+              <button type="submit" className="primary-button">
+                전송
+              </button>
+            </form>
+          </article>
 
-              <div className="message-list" ref={messagesRef}>
-                {game.messages.map((message) => (
-                  <div key={message.id} className={`message-bubble ${message.type}`}>
-                    <strong>{message.sender}</strong>
-                    <p>{message.text}</p>
-                  </div>
-                ))}
-              </div>
-
-              <form className="chat-form" onSubmit={handleMessageSubmit}>
-                <input
-                  value={draftMessage}
-                  onChange={(event) => setDraftMessage(event.target.value)}
-                  placeholder={canDraw ? '채팅으로 힌트를 주지는 마세요' : '정답 또는 채팅 입력'}
-                  maxLength={80}
-                />
-                <button type="submit" className="primary-button">
-                  전송
+          <article className="panel-card player-card">
+            <div className="panel-header">
+              <h3>플레이어</h3>
+              {game.canStart ? (
+                <button type="button" className="primary-button" onClick={() => socketRef.current?.emit('startGame')}>
+                  게임 시작
                 </button>
-              </form>
-            </article>
-          </aside>
+              ) : null}
+            </div>
+
+            {game.isHost && game.phase === 'lobby' ? (
+              <div className="round-config-card">
+                <div className="tool-row compact">
+                  <span className="tool-label">총 라운드 수</span>
+                  <span className="tool-hint">시작 전 호스트만 변경 가능</span>
+                </div>
+                <div className="round-option-grid">
+                  {ROUND_OPTIONS.map((roundOption) => (
+                    <button
+                      key={roundOption}
+                      type="button"
+                      className={game.maxRounds === roundOption ? 'size-chip active' : 'size-chip'}
+                      onClick={() => socketRef.current?.emit('setMaxRounds', roundOption)}
+                    >
+                      {roundOption}R
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <ul className="player-list">
+              {game.players.map((player) => (
+                <li key={player.id} className={player.isMe ? 'player-row self' : 'player-row'}>
+                  <div>
+                    <strong>{player.nickname}</strong>
+                    <span>
+                      {player.isHost ? '호스트' : '플레이어'}
+                      {player.id === game.drawerId ? ' · 그리는 중' : ''}
+                    </span>
+                  </div>
+                  <b>{player.score}</b>
+                </li>
+              ))}
+            </ul>
+          </article>
         </section>
       ) : null}
     </main>
