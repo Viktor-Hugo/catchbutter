@@ -2,7 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
 
-const PALETTE = ['#101418', '#f97316', '#0f766e', '#2563eb', '#be123c', '#7c3aed']
+const PALETTE = [
+  '#101418',
+  '#ffffff',
+  '#f97316',
+  '#facc15',
+  '#22c55e',
+  '#0f766e',
+  '#06b6d4',
+  '#2563eb',
+  '#7c3aed',
+  '#be123c',
+  '#ec4899',
+  '#7c2d12',
+]
 const BRUSHES = [4, 8, 12, 18]
 
 const initialRoomCode = (() => {
@@ -55,6 +68,141 @@ function getPhaseLabel(phase) {
   }
 
   return '로비'
+}
+
+function hexToRgba(hexColor) {
+  const value = String(hexColor || '').replace('#', '').trim()
+
+  if (value.length !== 6) {
+    return null
+  }
+
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16),
+    a: 255,
+  }
+}
+
+function rgbaMatches(data, index, rgba, tolerance = 8) {
+  return (
+    Math.abs(data[index] - rgba.r) <= tolerance &&
+    Math.abs(data[index + 1] - rgba.g) <= tolerance &&
+    Math.abs(data[index + 2] - rgba.b) <= tolerance &&
+    Math.abs(data[index + 3] - rgba.a) <= tolerance
+  )
+}
+
+function clearCanvasElement(canvas) {
+  if (!canvas) {
+    return
+  }
+
+  const context = canvas.getContext('2d')
+  context.save()
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.restore()
+}
+
+function floodFillCanvas(canvas, action) {
+  if (!canvas || !action?.point) {
+    return
+  }
+
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  const fillColor = hexToRgba(action.color)
+
+  if (!fillColor) {
+    return
+  }
+
+  const startX = Math.min(canvas.width - 1, Math.max(0, Math.floor(action.point.x * canvas.width)))
+  const startY = Math.min(canvas.height - 1, Math.max(0, Math.floor(action.point.y * canvas.height)))
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+  const { data, width, height } = imageData
+  const startIndex = (startY * width + startX) * 4
+  const targetColor = {
+    r: data[startIndex],
+    g: data[startIndex + 1],
+    b: data[startIndex + 2],
+    a: data[startIndex + 3],
+  }
+
+  if (rgbaMatches(data, startIndex, fillColor, 0)) {
+    return
+  }
+
+  const stack = [[startX, startY]]
+
+  while (stack.length) {
+    const nextPoint = stack.pop()
+
+    if (!nextPoint) {
+      continue
+    }
+
+    const [x, y] = nextPoint
+
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+      continue
+    }
+
+    const pixelIndex = (y * width + x) * 4
+
+    if (!rgbaMatches(data, pixelIndex, targetColor)) {
+      continue
+    }
+
+    data[pixelIndex] = fillColor.r
+    data[pixelIndex + 1] = fillColor.g
+    data[pixelIndex + 2] = fillColor.b
+    data[pixelIndex + 3] = fillColor.a
+
+    stack.push([x + 1, y])
+    stack.push([x - 1, y])
+    stack.push([x, y + 1])
+    stack.push([x, y - 1])
+  }
+
+  context.putImageData(imageData, 0, 0)
+}
+
+function drawStrokeOnCanvas(canvas, segment) {
+  if (!canvas) {
+    return
+  }
+
+  const context = canvas.getContext('2d')
+  const width = canvas.clientWidth
+  const height = canvas.clientHeight
+
+  context.save()
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+  context.lineWidth = segment.size
+  context.globalCompositeOperation = segment.mode === 'erase' ? 'destination-out' : 'source-over'
+  context.strokeStyle = segment.mode === 'erase' ? 'rgba(0,0,0,1)' : segment.color
+  context.beginPath()
+  context.moveTo(segment.from.x * width, segment.from.y * height)
+  context.lineTo(segment.to.x * width, segment.to.y * height)
+  context.stroke()
+  context.restore()
+}
+
+function applyCanvasActionToCanvas(canvas, segment) {
+  if (segment?.kind === 'fill') {
+    floodFillCanvas(canvas, segment)
+    return
+  }
+
+  drawStrokeOnCanvas(canvas, segment)
+}
+
+function repaintCanvasElement(canvas, segments) {
+  clearCanvasElement(canvas)
+  segments.forEach((segment) => applyCanvasActionToCanvas(canvas, segment))
 }
 
 function App() {
@@ -124,20 +272,7 @@ function App() {
       context.setTransform(1, 0, 0, 1, 0, 0)
       context.clearRect(0, 0, canvas.width, canvas.height)
       context.restore()
-      segmentsRef.current.forEach((segment) => {
-        context.save()
-        context.lineCap = 'round'
-        context.lineJoin = 'round'
-        context.lineWidth = segment.size
-        context.globalCompositeOperation =
-          segment.mode === 'erase' ? 'destination-out' : 'source-over'
-        context.strokeStyle = segment.mode === 'erase' ? 'rgba(0,0,0,1)' : segment.color
-        context.beginPath()
-        context.moveTo(segment.from.x * width, segment.from.y * height)
-        context.lineTo(segment.to.x * width, segment.to.y * height)
-        context.stroke()
-        context.restore()
-      })
+      repaintCanvasElement(canvas, segmentsRef.current)
     }
 
     const observer = new ResizeObserver(() => {
@@ -152,49 +287,6 @@ function App() {
 
     return () => observer.disconnect()
   }, [joined])
-
-  function clearCanvas() {
-    const canvas = canvasRef.current
-
-    if (!canvas) {
-      return
-    }
-
-    const context = canvas.getContext('2d')
-    context.save()
-    context.setTransform(1, 0, 0, 1, 0, 0)
-    context.clearRect(0, 0, canvas.width, canvas.height)
-    context.restore()
-  }
-
-  function drawSegment(segment) {
-    const canvas = canvasRef.current
-
-    if (!canvas) {
-      return
-    }
-
-    const context = canvas.getContext('2d')
-    const width = canvas.clientWidth
-    const height = canvas.clientHeight
-
-    context.save()
-    context.lineCap = 'round'
-    context.lineJoin = 'round'
-    context.lineWidth = segment.size
-    context.globalCompositeOperation = segment.mode === 'erase' ? 'destination-out' : 'source-over'
-    context.strokeStyle = segment.mode === 'erase' ? 'rgba(0,0,0,1)' : segment.color
-    context.beginPath()
-    context.moveTo(segment.from.x * width, segment.from.y * height)
-    context.lineTo(segment.to.x * width, segment.to.y * height)
-    context.stroke()
-    context.restore()
-  }
-
-  function repaintCanvas() {
-    clearCanvas()
-    segmentsRef.current.forEach((segment) => drawSegment(segment))
-  }
 
   function attachSocket(socket) {
     socket.on('connect', () => {
@@ -223,12 +315,12 @@ function App() {
 
     socket.on('canvasState', (segments) => {
       segmentsRef.current = Array.isArray(segments) ? segments : []
-      repaintCanvas()
+      repaintCanvasElement(canvasRef.current, segmentsRef.current)
     })
 
-    socket.on('drawSegment', (segment) => {
+    socket.on('canvasAction', (segment) => {
       segmentsRef.current = [...segmentsRef.current, segment]
-      drawSegment(segment)
+      applyCanvasActionToCanvas(canvasRef.current, segment)
     })
   }
 
@@ -297,6 +389,19 @@ function App() {
       return
     }
 
+    if (toolMode === 'fill') {
+      const segment = {
+        kind: 'fill',
+        point: buildPoint(event),
+        color: brushColor,
+      }
+
+      segmentsRef.current = [...segmentsRef.current, segment]
+      applyCanvasActionToCanvas(canvasRef.current, segment)
+      socketRef.current?.emit('canvasAction', segment)
+      return
+    }
+
     drawingRef.current = true
     previousPointRef.current = buildPoint(event)
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -315,6 +420,7 @@ function App() {
     }
 
     const segment = {
+      kind: 'stroke',
       from: previousPoint,
       to: nextPoint,
       color: brushColor,
@@ -323,8 +429,8 @@ function App() {
     }
 
     segmentsRef.current = [...segmentsRef.current, segment]
-    drawSegment(segment)
-    socketRef.current?.emit('drawSegment', segment)
+    applyCanvasActionToCanvas(canvasRef.current, segment)
+    socketRef.current?.emit('canvasAction', segment)
     previousPointRef.current = nextPoint
   }
 
@@ -431,66 +537,91 @@ function App() {
             </div>
 
             <div className="toolbar-card">
-              <div className="tool-row">
-                <span className="tool-label">도구</span>
-                <button
-                  type="button"
-                  className={toolMode === 'draw' ? 'tool-button active' : 'tool-button'}
-                  onClick={() => setToolMode('draw')}
-                >
-                  펜
-                </button>
-                <button
-                  type="button"
-                  className={toolMode === 'erase' ? 'tool-button active' : 'tool-button'}
-                  onClick={() => setToolMode('erase')}
-                >
-                  지우개
-                </button>
-                <button
-                  type="button"
-                  className="tool-button"
-                  onClick={() => socketRef.current?.emit('clearCanvas')}
-                  disabled={!canDraw}
-                >
-                  전체 지우기
-                </button>
-              </div>
-
-              <div className="tool-row">
-                <span className="tool-label">색상</span>
-                {PALETTE.map((color) => (
+              <div className="toolbar-section">
+                <div className="tool-row compact">
+                  <span className="tool-label">도구</span>
+                  <span className="tool-hint">출제자만 사용 가능</span>
+                </div>
+                <div className="tool-chip-grid">
                   <button
-                    key={color}
                     type="button"
-                    className={brushColor === color ? 'color-chip active' : 'color-chip'}
-                    style={{ backgroundColor: color }}
-                    onClick={() => setBrushColor(color)}
-                    disabled={!canDraw}
-                    aria-label={`색상 ${color}`}
-                  />
-                ))}
-              </div>
-
-              <div className="tool-row">
-                <span className="tool-label">굵기</span>
-                {BRUSHES.map((size) => (
-                  <button
-                    key={size}
-                    type="button"
-                    className={brushSize === size ? 'size-chip active' : 'size-chip'}
-                    onClick={() => setBrushSize(size)}
+                    className={toolMode === 'draw' ? 'tool-button active' : 'tool-button'}
+                    onClick={() => setToolMode('draw')}
                     disabled={!canDraw}
                   >
-                    {size}
+                    펜
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    className={toolMode === 'fill' ? 'tool-button active' : 'tool-button'}
+                    onClick={() => setToolMode('fill')}
+                    disabled={!canDraw}
+                  >
+                    채우기
+                  </button>
+                  <button
+                    type="button"
+                    className={toolMode === 'erase' ? 'tool-button active' : 'tool-button'}
+                    onClick={() => setToolMode('erase')}
+                    disabled={!canDraw}
+                  >
+                    지우개
+                  </button>
+                  <button
+                    type="button"
+                    className="tool-button"
+                    onClick={() => socketRef.current?.emit('clearCanvas')}
+                    disabled={!canDraw}
+                  >
+                    전체 지우기
+                  </button>
+                </div>
+              </div>
+
+              <div className="toolbar-section">
+                <div className="tool-row compact">
+                  <span className="tool-label">색상</span>
+                  <span className="tool-hint">{PALETTE.length}가지</span>
+                </div>
+                <div className="palette-grid">
+                  {PALETTE.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={brushColor === color ? 'color-chip active' : 'color-chip'}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setBrushColor(color)}
+                      disabled={!canDraw}
+                      aria-label={`색상 ${color}`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="toolbar-section">
+                <div className="tool-row compact">
+                  <span className="tool-label">굵기</span>
+                  <span className="tool-hint">현재 {brushSize}px</span>
+                </div>
+                <div className="size-grid">
+                  {BRUSHES.map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      className={brushSize === size ? 'size-chip active' : 'size-chip'}
+                      onClick={() => setBrushSize(size)}
+                      disabled={!canDraw}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </article>
 
           <aside className="side-column">
-            <article className="panel-card">
+            <article className="panel-card player-card">
               <div className="panel-header">
                 <h3>플레이어</h3>
                 {game.canStart ? (

@@ -259,12 +259,27 @@ function startGame(room) {
   beginRound(room)
 }
 
-function validateSegment(segment) {
-  if (!segment || typeof segment !== 'object') {
+function validateCanvasAction(action) {
+  if (!action || typeof action !== 'object') {
     return false
   }
 
-  const points = [segment.from, segment.to]
+  if (action.kind === 'fill') {
+    const point = action.point
+
+    return (
+      point &&
+      typeof point.x === 'number' &&
+      typeof point.y === 'number' &&
+      point.x >= 0 &&
+      point.x <= 1 &&
+      point.y >= 0 &&
+      point.y <= 1 &&
+      typeof action.color === 'string'
+    )
+  }
+
+  const points = [action.from, action.to]
   const hasValidPoints = points.every(
     (point) =>
       point &&
@@ -280,7 +295,7 @@ function validateSegment(segment) {
     return false
   }
 
-  return ['draw', 'erase'].includes(segment.mode) && typeof segment.size === 'number'
+  return ['draw', 'erase'].includes(action.mode) && typeof action.size === 'number'
 }
 
 io.on('connection', (socket) => {
@@ -339,23 +354,31 @@ io.on('connection', (socket) => {
     emitRoomState(room)
   })
 
-  socket.on('drawSegment', (segment) => {
+  socket.on('canvasAction', (action) => {
     const room = rooms.get(socket.data.roomCode)
 
-    if (!room || room.phase !== 'drawing' || room.drawerId !== socket.id || !validateSegment(segment)) {
+    if (!room || room.phase !== 'drawing' || room.drawerId !== socket.id || !validateCanvasAction(action)) {
       return
     }
 
-    const sanitizedSegment = {
-      from: segment.from,
-      to: segment.to,
-      color: typeof segment.color === 'string' ? segment.color.slice(0, 20) : '#101418',
-      size: Math.max(2, Math.min(24, Number(segment.size) || 6)),
-      mode: segment.mode,
-    }
+    const sanitizedSegment =
+      action.kind === 'fill'
+        ? {
+            kind: 'fill',
+            point: action.point,
+            color: typeof action.color === 'string' ? action.color.slice(0, 20) : '#101418',
+          }
+        : {
+            kind: 'stroke',
+            from: action.from,
+            to: action.to,
+            color: typeof action.color === 'string' ? action.color.slice(0, 20) : '#101418',
+            size: Math.max(2, Math.min(24, Number(action.size) || 6)),
+            mode: action.mode,
+          }
 
     room.segments.push(sanitizedSegment)
-    socket.to(room.code).emit('drawSegment', sanitizedSegment)
+    socket.to(room.code).emit('canvasAction', sanitizedSegment)
   })
 
   socket.on('clearCanvas', () => {

@@ -2,35 +2,31 @@
 
 길드원끼리 PC와 모바일 브라우저에서 바로 접속해 즐길 수 있는 로컬 우선 그림 맞히기 게임 프로토타입입니다.
 
-## 무료 배포
+## 배포
 
-무료 배포는 단일 Node 서비스로 올리는 방식이 가장 단순합니다. 현재 구조는 서버가 빌드된 프론트를 같이 서빙하므로 Render 같은 Node 호스팅에 바로 맞출 수 있게 정리되어 있습니다.
+현재 구조는 서버가 빌드된 프론트를 같이 서빙하는 단일 Node 서비스입니다. 그래서 Railway 같은 Node 호스팅에 바로 올릴 수 있습니다.
 
-가장 현실적인 선택은 Render입니다. 무료 플랜에서도 소규모 Socket.IO 게임 테스트는 가능하고, 길드원은 링크만 열면 됩니다.
-
-### Render 기준
+### Railway 기준
 
 1. GitHub에 이 프로젝트를 올립니다.
-2. Render에서 `New +` -> `Web Service`를 선택합니다.
+2. Railway에서 `New Project` -> `Deploy from GitHub repo`를 선택합니다.
 3. 저장소를 연결합니다.
-4. 아래 값으로 설정합니다.
+4. 루트 폴더 그대로 배포합니다.
+
+이 저장소에는 이미 [`railway.json`](./railway.json)이 들어 있어서, Railway가 아래 값을 그대로 사용합니다.
 
 ```txt
-Environment: Node
 Build Command: npm install && npm run build
 Start Command: npm run start
 Health Check Path: /health
 ```
 
-5. 배포가 끝나면 발급된 `https://...onrender.com` 주소를 길드원에게 공유합니다.
-
-Render 대시보드에서 별도로 건드릴 값은 거의 없습니다. 루트 폴더를 그대로 사용하면 됩니다.
+5. 배포가 끝나면 발급된 `https://...up.railway.app` 주소를 길드원에게 공유합니다.
 
 주의:
 
-- 무료 인스턴스는 처음 접속 시 슬립 복귀 때문에 수십 초 정도 느릴 수 있습니다.
-- Socket.IO를 쓰므로 반드시 정적 사이트가 아니라 Node 웹 서비스로 배포해야 합니다.
-- Render 정책은 바뀔 수 있으니 무료 플랜 제공 여부는 배포 시점에 한 번만 확인하면 됩니다.
+- Socket.IO를 쓰므로 반드시 정적 사이트가 아니라 Node 서비스로 배포해야 합니다.
+- Railway 요금 정책은 바뀔 수 있으니, 실제 배포 전에 현재 플랜 조건은 본인 계정 기준으로 한 번 확인하는 편이 안전합니다.
 - 처음 배포 전에는 로컬에서 `npm install`, `npm run build`, `npm run start` 가 모두 통과하는지만 보면 충분합니다.
 
 ## 구성
