@@ -32,6 +32,7 @@ const emptyGame = {
   maxRounds: 6,
   timeLeft: 0,
   answer: '게임 대기 중',
+  wordChoices: [],
   resultText: '방에 입장해 게임을 시작하세요.',
   drawerId: null,
   drawerName: '대기 중',
@@ -60,6 +61,10 @@ function clamp(value, min, max) {
 }
 
 function getPhaseLabel(phase) {
+  if (phase === 'choosing') {
+    return '단어 선택'
+  }
+
   if (phase === 'drawing') {
     return '진행 중'
   }
@@ -240,6 +245,7 @@ function App() {
 
   const joined = Boolean(game.roomCode)
   const canDraw = joined && game.phase === 'drawing' && game.drawerId === game.meId
+  const canChooseWord = joined && game.phase === 'choosing' && game.drawerId === game.meId
   const resultTone = getResultTone(game)
   const shareUrl = game.roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${game.roomCode}`
@@ -533,7 +539,7 @@ function App() {
                 <h2>{game.answer || '준비 중'}</h2>
               </div>
               <div className="pill-group">
-                <span className="status-pill">{game.drawerName} 그림 차례</span>
+                <span className="status-pill">{game.drawerName} 차례</span>
               </div>
             </header>
 
@@ -541,6 +547,27 @@ function App() {
               <strong>{game.phase === 'round-end' && game.resultText.includes('정답!') ? '정답 맞힘' : '안내'}</strong>
               <span>{game.resultText}</span>
             </div>
+
+            {canChooseWord ? (
+              <div className="word-choice-card">
+                <div className="tool-row compact">
+                  <span className="tool-label">이번 라운드 제시어</span>
+                  <span className="tool-hint">15초 안에 하나를 선택하세요</span>
+                </div>
+                <div className="word-choice-grid">
+                  {game.wordChoices.map((wordChoice) => (
+                    <button
+                      key={wordChoice}
+                      type="button"
+                      className="word-choice-button"
+                      onClick={() => socketRef.current?.emit('chooseWord', wordChoice)}
+                    >
+                      {wordChoice}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="canvas-stage" ref={stageRef}>
               <canvas

@@ -193,6 +193,38 @@ input:focus {
   background: rgba(15, 118, 110, 0.12);
 }
 
+.word-choice-card {
+  display: grid;
+  gap: 10px;
+  border-radius: 20px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.12), rgba(255, 255, 255, 0.92));
+  border: 1px solid rgba(249, 115, 22, 0.14);
+}
+
+.word-choice-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.word-choice-button {
+  min-height: 52px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.word-choice-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(249, 115, 22, 0.14);
+}
+
 .board-header,
 .panel-header,
 .tool-row {
@@ -426,19 +458,66 @@ input:focus {
     align-items: start;
   }
 
-   .board-card {
+  .board-card {
     grid-column: 1;
     grid-row: 1 / span 2;
+    grid-template-columns: 220px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .board-header,
+  .result-banner,
+  .word-choice-card,
+  .canvas-stage {
+    grid-column: 2;
+  }
+
+  .toolbar-card {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    align-self: stretch;
+    position: sticky;
+    top: 18px;
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .toolbar-card .tool-button,
+  .toolbar-card .size-chip {
+    min-height: 40px;
+    padding: 0 12px;
+  }
+
+  .toolbar-card .color-chip {
+    min-height: 34px;
+    border-radius: 12px;
+  }
+
+  .tool-chip-grid,
+  .size-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .palette-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .player-card {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .chat-card {
     grid-column: 2;
     grid-row: 1;
   }
 
   .chat-card {
-    grid-column: 2;
-    grid-row: 2;
+    min-height: 360px;
+  }
+
+  .message-list {
+    max-height: min(42svh, 430px);
   }
 }
 
@@ -501,7 +580,8 @@ input:focus {
 
   .tool-chip-grid,
   .round-option-grid,
-  .size-grid {
+  .size-grid,
+  .word-choice-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

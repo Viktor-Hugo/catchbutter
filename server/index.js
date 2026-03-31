@@ -15,6 +15,7 @@ const __dirname = path.dirname(__filename)
 
 const PORT = Number(process.env.PORT || 3001)
 const HOST = process.env.HOST || '0.0.0.0'
+const WORD_CHOICE_DURATION_MS = 15_000
 const ROUND_DURATION_MS = 80_000
 const INTERMISSION_MS = 4_000
 const MIN_ROUNDS = 2
@@ -104,6 +105,24 @@ function pickWord(room) {
   return room.wordDeck.pop() || WORDS[0] || '정답'
 }
 
+function pickWordChoices(room, count = 3) {
+  const choices = []
+  const usedWords = new Set()
+
+  while (choices.length < count) {
+    const nextWord = pickWord(room)
+
+    if (usedWords.has(nextWord)) {
+      continue
+    }
+
+    usedWords.add(nextWord)
+    choices.push(nextWord)
+  }
+
+  return choices
+}
+
 function getRoom(roomCode) {
   if (!rooms.has(roomCode)) {
     rooms.set(roomCode, {
@@ -115,9 +134,11 @@ function getRoom(roomCode) {
       maxRounds: MAX_ROUNDS,
       timeLeft: 0,
       word: null,
+      wordChoices: [],
       resultText: '호스트가 게임을 시작하면 라운드가 열립니다.',
       messages: [createMessage('system', '시스템', '방이 열렸습니다. 플레이어를 기다리는 중입니다.')],
       segments: [],
+      chooseEndsAt: null,
       roundEndsAt: null,
       nextRoundAt: null,
       wordDeck: createWordDeck(),
@@ -151,6 +172,14 @@ function serializeRoomForPlayer(room, playerId) {
   const me = getPlayer(room, playerId)
   const drawer = getPlayer(room, room.drawerId)
   const revealAnswer = room.phase === 'round-end' || playerId === room.drawerId
+  const answer =
+    room.phase === 'choosing'
+      ? playerId === room.drawerId
+        ? '단어를 골라 주세요'
+        : '출제자가 단어를 고르는 중'
+      : revealAnswer
+        ? room.word
+        : maskWord(room.word)
 
   return {
     meId: playerId,
@@ -159,7 +188,8 @@ function serializeRoomForPlayer(room, playerId) {
     round: room.round,
     maxRounds: room.maxRounds,
     timeLeft: room.timeLeft,
-    answer: revealAnswer ? room.word : maskWord(room.word),
+    answer,
+    wordChoices: playerId === room.drawerId ? room.wordChoices : [],
     resultText: room.resultText,
     drawerId: room.drawerId,
     drawerName: drawer?.nickname || '대기 중',
@@ -191,9 +221,11 @@ function resetToLobby(room, message) {
   room.round = 0
   room.drawerId = null
   room.word = null
+  room.wordChoices = []
   room.timeLeft = 0
   room.resultText = message || '호스트가 게임을 시작하면 라운드가 열립니다.'
   room.segments = []
+  room.chooseEndsAt = null
   room.roundEndsAt = null
   room.nextRoundAt = null
   room.wordDeck = createWordDeck()
@@ -230,16 +262,33 @@ function beginRound(room) {
 
   room.round += 1
   room.drawerId = nextDrawer.id
-  room.word = pickWord(room)
-  room.phase = 'drawing'
-  room.timeLeft = Math.ceil(ROUND_DURATION_MS / 1000)
-  room.resultText = `${nextDrawer.nickname} 님이 그림을 그리는 중입니다.`
+  room.word = null
+  room.wordChoices = pickWordChoices(room)
+  room.phase = 'choosing'
+  room.timeLeft = Math.ceil(WORD_CHOICE_DURATION_MS / 1000)
+  room.resultText = `${nextDrawer.nickname} 님이 단어를 고르는 중입니다.`
   room.segments = []
-  room.roundEndsAt = Date.now() + ROUND_DURATION_MS
+  room.chooseEndsAt = Date.now() + WORD_CHOICE_DURATION_MS
+  room.roundEndsAt = null
   room.nextRoundAt = null
 
-  pushSystemMessage(room, `라운드 ${room.round} 시작. ${nextDrawer.nickname} 님이 그림을 그립니다.`)
+  pushSystemMessage(room, `라운드 ${room.round} 시작. ${nextDrawer.nickname} 님이 단어를 고르는 중입니다.`)
   emitCanvasState(room)
+  emitRoomState(room)
+}
+
+function startDrawingPhase(room, chosenWord) {
+  const drawer = getPlayer(room, room.drawerId)
+
+  room.word = chosenWord
+  room.wordChoices = []
+  room.phase = 'drawing'
+  room.timeLeft = Math.ceil(ROUND_DURATION_MS / 1000)
+  room.resultText = `${drawer?.nickname || '출제자'} 님이 그림을 그리는 중입니다.`
+  room.chooseEndsAt = null
+  room.roundEndsAt = Date.now() + ROUND_DURATION_MS
+
+  pushSystemMessage(room, `제시어가 선택됐습니다. ${drawer?.nickname || '출제자'} 님이 그림을 그립니다.`)
   emitRoomState(room)
 }
 
@@ -365,6 +414,22 @@ io.on('connection', (socket) => {
     startGame(room)
   })
 
+  socket.on('chooseWord', (word) => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room || room.drawerId !== socket.id || room.phase !== 'choosing') {
+      return
+    }
+
+    const chosenWord = room.wordChoices.find((candidate) => candidate === word)
+
+    if (!chosenWord) {
+      return
+    }
+
+    startDrawingPhase(room, chosenWord)
+  })
+
   socket.on('setMaxRounds', (nextValue) => {
     const room = rooms.get(socket.data.roomCode)
 
@@ -462,6 +527,12 @@ io.on('connection', (socket) => {
       pushSystemMessage(room, `${leavingPlayer.nickname} 님이 퇴장했습니다.`)
     }
 
+    if (room.drawerId === socket.id && room.phase === 'choosing') {
+      room.round -= 1
+      beginRound(room)
+      return
+    }
+
     if (room.drawerId === socket.id && room.phase === 'drawing') {
       finishRound(room, null, 'drawer-left')
       return
@@ -480,6 +551,19 @@ setInterval(() => {
   const now = Date.now()
 
   rooms.forEach((room) => {
+    if (room.phase === 'choosing' && room.chooseEndsAt) {
+      const nextTimeLeft = Math.max(0, Math.ceil((room.chooseEndsAt - now) / 1000))
+
+      if (nextTimeLeft !== room.timeLeft) {
+        room.timeLeft = nextTimeLeft
+        emitRoomState(room)
+      }
+
+      if (room.chooseEndsAt <= now) {
+        startDrawingPhase(room, room.wordChoices[0] || pickWord(room))
+      }
+    }
+
     if (room.phase === 'drawing' && room.roundEndsAt) {
       const nextTimeLeft = Math.max(0, Math.ceil((room.roundEndsAt - now) / 1000))
 
