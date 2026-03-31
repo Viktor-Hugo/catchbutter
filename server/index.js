@@ -1,0 +1,472 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import cors from 'cors'
+import express from 'express'
+import { createServer } from 'node:http'
+import { Server } from 'socket.io'
+
+import { WORDS } from './words.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const PORT = Number(process.env.PORT || 3001)
+const HOST = process.env.HOST || '0.0.0.0'
+const ROUND_DURATION_MS = 80_000
+const INTERMISSION_MS = 4_000
+const MAX_ROUNDS = 6
+const MAX_MESSAGES = 40
+const rooms = new Map()
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+app.get('/health', (_request, response) => {
+  response.json({ ok: true, rooms: rooms.size })
+})
+
+const clientDistPath = path.resolve(__dirname, '../client/dist')
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath))
+  app.get(/^(?!\/socket\.io).*/, (_request, response) => {
+    response.sendFile(path.join(clientDistPath, 'index.html'))
+  })
+}
+
+const httpServer = createServer(app)
+const io = new Server(httpServer, {
+  cors: {
+    origin: '*',
+  },
+})
+
+function sanitizeNickname(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 14)
+}
+
+function sanitizeRoomCode(value) {
+  const cleaned = String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 6)
+
+  return cleaned || Math.random().toString(36).slice(2, 8).toUpperCase()
+}
+
+function createMessage(type, sender, text) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    sender,
+    text,
+    createdAt: Date.now(),
+  }
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .trim()
+}
+
+function maskWord(word) {
+  return Array.from(word || '')
+    .map((character) => (character.trim() ? '●' : ' '))
+    .join('')
+}
+
+function pickWord() {
+  return WORDS[Math.floor(Math.random() * WORDS.length)]
+}
+
+function getRoom(roomCode) {
+  if (!rooms.has(roomCode)) {
+    rooms.set(roomCode, {
+      code: roomCode,
+      hostId: null,
+      drawerId: null,
+      phase: 'lobby',
+      round: 0,
+      maxRounds: MAX_ROUNDS,
+      timeLeft: 0,
+      word: null,
+      resultText: '호스트가 게임을 시작하면 라운드가 열립니다.',
+      messages: [createMessage('system', '시스템', '방이 열렸습니다. 플레이어를 기다리는 중입니다.')],
+      segments: [],
+      roundEndsAt: null,
+      nextRoundAt: null,
+      players: [],
+    })
+  }
+
+  return rooms.get(roomCode)
+}
+
+function getPlayer(room, playerId) {
+  return room.players.find((player) => player.id === playerId) || null
+}
+
+function pushSystemMessage(room, text) {
+  room.messages.push(createMessage('system', '시스템', text))
+  room.messages = room.messages.slice(-MAX_MESSAGES)
+}
+
+function pushChatMessage(room, sender, text) {
+  room.messages.push(createMessage('chat', sender, text))
+  room.messages = room.messages.slice(-MAX_MESSAGES)
+}
+
+function serializeRoomForPlayer(room, playerId) {
+  const me = getPlayer(room, playerId)
+  const drawer = getPlayer(room, room.drawerId)
+  const revealAnswer = room.phase === 'round-end' || playerId === room.drawerId
+
+  return {
+    meId: playerId,
+    roomCode: room.code,
+    phase: room.phase,
+    round: room.round,
+    maxRounds: room.maxRounds,
+    timeLeft: room.timeLeft,
+    answer: revealAnswer ? room.word : maskWord(room.word),
+    resultText: room.resultText,
+    drawerId: room.drawerId,
+    drawerName: drawer?.nickname || '대기 중',
+    isHost: room.hostId === playerId,
+    canStart: room.hostId === playerId && room.phase === 'lobby' && room.players.length >= 2,
+    players: room.players.map((player) => ({
+      id: player.id,
+      nickname: player.nickname,
+      score: player.score,
+      isHost: player.id === room.hostId,
+      isMe: player.id === me?.id,
+    })),
+    messages: room.messages,
+  }
+}
+
+function emitRoomState(room) {
+  room.players.forEach((player) => {
+    io.to(player.id).emit('roomState', serializeRoomForPlayer(room, player.id))
+  })
+}
+
+function emitCanvasState(room) {
+  io.to(room.code).emit('canvasState', room.segments)
+}
+
+function resetToLobby(room, message) {
+  room.phase = 'lobby'
+  room.round = 0
+  room.drawerId = null
+  room.word = null
+  room.timeLeft = 0
+  room.resultText = message || '호스트가 게임을 시작하면 라운드가 열립니다.'
+  room.segments = []
+  room.roundEndsAt = null
+  room.nextRoundAt = null
+  emitCanvasState(room)
+  emitRoomState(room)
+}
+
+function concludeGame(room) {
+  const sortedPlayers = [...room.players].sort((left, right) => right.score - left.score)
+  const winner = sortedPlayers[0]
+  pushSystemMessage(
+    room,
+    winner
+      ? `게임 종료. 우승자는 ${winner.nickname} (${winner.score}점) 입니다.`
+      : '게임 종료. 플레이어가 없습니다.',
+  )
+  resetToLobby(room, winner ? `${winner.nickname} 님이 최종 우승했습니다.` : '플레이어가 사라져 게임이 종료됐습니다.')
+}
+
+function beginRound(room) {
+  if (room.players.length < 2) {
+    resetToLobby(room, '플레이어가 2명 이상 있어야 게임을 시작할 수 있습니다.')
+    return
+  }
+
+  if (room.round >= room.maxRounds) {
+    concludeGame(room)
+    return
+  }
+
+  const currentDrawerIndex = room.players.findIndex((player) => player.id === room.drawerId)
+  const nextDrawerIndex = currentDrawerIndex >= 0 ? (currentDrawerIndex + 1) % room.players.length : 0
+  const nextDrawer = room.players[nextDrawerIndex]
+
+  room.round += 1
+  room.drawerId = nextDrawer.id
+  room.word = pickWord()
+  room.phase = 'drawing'
+  room.timeLeft = Math.ceil(ROUND_DURATION_MS / 1000)
+  room.resultText = `${nextDrawer.nickname} 님이 그림을 그리는 중입니다.`
+  room.segments = []
+  room.roundEndsAt = Date.now() + ROUND_DURATION_MS
+  room.nextRoundAt = null
+
+  pushSystemMessage(room, `라운드 ${room.round} 시작. ${nextDrawer.nickname} 님이 그림을 그립니다.`)
+  emitCanvasState(room)
+  emitRoomState(room)
+}
+
+function finishRound(room, winnerId, reason) {
+  if (room.phase !== 'drawing') {
+    return
+  }
+
+  const winner = winnerId ? getPlayer(room, winnerId) : null
+  const drawer = getPlayer(room, room.drawerId)
+
+  if (winner && drawer) {
+    winner.score += Math.max(40, room.timeLeft * 2)
+    drawer.score += 60
+  }
+
+  room.phase = 'round-end'
+  room.timeLeft = 0
+  room.roundEndsAt = null
+  room.nextRoundAt = Date.now() + INTERMISSION_MS
+  room.resultText =
+    winner && drawer
+      ? `${winner.nickname} 정답! 제시어는 \"${room.word}\"였습니다.`
+      : reason === 'drawer-left'
+        ? `그리는 사람이 나가서 라운드가 종료됐습니다. 제시어는 \"${room.word}\"였습니다.`
+        : `시간 종료. 제시어는 \"${room.word}\"였습니다.`
+
+  pushSystemMessage(room, room.resultText)
+  emitRoomState(room)
+}
+
+function startGame(room) {
+  room.players.forEach((player) => {
+    player.score = 0
+  })
+
+  room.messages = room.messages.slice(-10)
+  room.round = 0
+  room.drawerId = null
+  room.resultText = '새 게임을 준비 중입니다.'
+  beginRound(room)
+}
+
+function validateSegment(segment) {
+  if (!segment || typeof segment !== 'object') {
+    return false
+  }
+
+  const points = [segment.from, segment.to]
+  const hasValidPoints = points.every(
+    (point) =>
+      point &&
+      typeof point.x === 'number' &&
+      typeof point.y === 'number' &&
+      point.x >= 0 &&
+      point.x <= 1 &&
+      point.y >= 0 &&
+      point.y <= 1,
+  )
+
+  if (!hasValidPoints) {
+    return false
+  }
+
+  return ['draw', 'erase'].includes(segment.mode) && typeof segment.size === 'number'
+}
+
+io.on('connection', (socket) => {
+  socket.on('joinRoom', (payload = {}) => {
+    const nickname = sanitizeNickname(payload.nickname)
+    const roomCode = sanitizeRoomCode(payload.roomCode)
+
+    if (!nickname) {
+      socket.emit('joinError', '닉네임을 입력해 주세요.')
+      return
+    }
+
+    const room = getRoom(roomCode)
+    socket.join(room.code)
+    room.players.push({
+      id: socket.id,
+      nickname,
+      score: 0,
+    })
+
+    if (!room.hostId) {
+      room.hostId = socket.id
+    }
+
+    socket.data.roomCode = room.code
+    pushSystemMessage(room, `${nickname} 님이 입장했습니다.`)
+    emitRoomState(room)
+    socket.emit('canvasState', room.segments)
+  })
+
+  socket.on('startGame', () => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room || room.hostId !== socket.id || room.players.length < 2) {
+      return
+    }
+
+    startGame(room)
+  })
+
+  socket.on('sendMessage', (rawText) => {
+    const room = rooms.get(socket.data.roomCode)
+    const player = room ? getPlayer(room, socket.id) : null
+    const text = String(rawText || '').trim().slice(0, 80)
+
+    if (!room || !player || !text) {
+      return
+    }
+
+    if (room.phase === 'drawing' && socket.id !== room.drawerId && normalizeText(text) === normalizeText(room.word)) {
+      finishRound(room, socket.id, 'correct')
+      return
+    }
+
+    pushChatMessage(room, player.nickname, text)
+    emitRoomState(room)
+  })
+
+  socket.on('drawSegment', (segment) => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room || room.phase !== 'drawing' || room.drawerId !== socket.id || !validateSegment(segment)) {
+      return
+    }
+
+    const sanitizedSegment = {
+      from: segment.from,
+      to: segment.to,
+      color: typeof segment.color === 'string' ? segment.color.slice(0, 20) : '#101418',
+      size: Math.max(2, Math.min(24, Number(segment.size) || 6)),
+      mode: segment.mode,
+    }
+
+    room.segments.push(sanitizedSegment)
+    socket.to(room.code).emit('drawSegment', sanitizedSegment)
+  })
+
+  socket.on('clearCanvas', () => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room || room.drawerId !== socket.id) {
+      return
+    }
+
+    room.segments = []
+    emitCanvasState(room)
+  })
+
+  socket.on('disconnect', () => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room) {
+      return
+    }
+
+    const leavingPlayer = getPlayer(room, socket.id)
+    room.players = room.players.filter((player) => player.id !== socket.id)
+
+    if (!room.players.length) {
+      rooms.delete(room.code)
+      return
+    }
+
+    if (room.hostId === socket.id) {
+      room.hostId = room.players[0].id
+    }
+
+    if (leavingPlayer) {
+      pushSystemMessage(room, `${leavingPlayer.nickname} 님이 퇴장했습니다.`)
+    }
+
+    if (room.drawerId === socket.id && room.phase === 'drawing') {
+      finishRound(room, null, 'drawer-left')
+      return
+    }
+
+    if (room.players.length < 2 && room.phase !== 'lobby') {
+      resetToLobby(room, '플레이어 수가 부족해 로비로 돌아갑니다.')
+      return
+    }
+
+    emitRoomState(room)
+  })
+})
+
+setInterval(() => {
+  const now = Date.now()
+
+  rooms.forEach((room) => {
+    if (room.phase === 'drawing' && room.roundEndsAt) {
+      const nextTimeLeft = Math.max(0, Math.ceil((room.roundEndsAt - now) / 1000))
+
+      if (nextTimeLeft !== room.timeLeft) {
+        room.timeLeft = nextTimeLeft
+        emitRoomState(room)
+      }
+
+      if (room.roundEndsAt <= now) {
+        finishRound(room, null, 'timeout')
+      }
+    }
+
+    if (room.phase === 'round-end' && room.nextRoundAt && room.nextRoundAt <= now) {
+      beginRound(room)
+    }
+  })
+}, 500)
+
+function getNetworkUrls(port) {
+  const interfaces = os.networkInterfaces()
+  const urls = []
+
+  Object.values(interfaces).forEach((networkInterface) => {
+    networkInterface?.forEach((details) => {
+      if (details.family === 'IPv4' && !details.internal) {
+        urls.push(`http://${details.address}:${port}`)
+      }
+    })
+  })
+
+  return urls
+}
+
+function handleServerError(error) {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Stop the existing process or set a different PORT.`)
+    console.error(`Windows example: set PORT=3002 && npm run start`)
+    process.exit(1)
+  }
+
+  if (error.code === 'EACCES') {
+    console.error(`Permission denied while binding to ${HOST}:${PORT}. Try a higher port or run with sufficient privileges.`)
+    process.exit(1)
+  }
+
+  console.error('Server failed to start.', error)
+  process.exit(1)
+}
+
+httpServer.on('error', handleServerError)
+
+httpServer.listen(PORT, HOST, () => {
+  console.log('CatchButter server listening')
+  console.log(`Local:   http://localhost:${PORT}`)
+
+  getNetworkUrls(PORT).forEach((url) => {
+    console.log(`Network: ${url}`)
+  })
+})
