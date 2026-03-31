@@ -17,6 +17,7 @@ const PALETTE = [
   '#7c2d12',
 ]
 const BRUSHES = [4, 8, 12, 18]
+const DEFAULT_ROUNDS = 6
 const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
 
 const initialRoomCode = (() => {
@@ -29,7 +30,7 @@ const emptyGame = {
   roomCode: '',
   phase: 'lobby',
   round: 0,
-  maxRounds: 6,
+  maxRounds: DEFAULT_ROUNDS,
   timeLeft: 0,
   answer: '게임 대기 중',
   wordChoices: [],
@@ -58,6 +59,30 @@ function getServerUrl() {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
+}
+
+async function copyText(value) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return true
+  }
+
+  const input = document.createElement('textarea')
+  input.value = value
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  input.style.pointerEvents = 'none'
+  document.body.append(input)
+
+  try {
+    input.focus()
+    input.select()
+    input.setSelectionRange(0, input.value.length)
+    return document.execCommand('copy')
+  } finally {
+    input.remove()
+  }
 }
 
 function getPhaseLabel(phase) {
@@ -234,6 +259,9 @@ function App() {
   const [brushSize, setBrushSize] = useState(BRUSHES[1])
   const [toolMode, setToolMode] = useState('draw')
   const [copied, setCopied] = useState(false)
+  const [shareFeedback, setShareFeedback] = useState('')
+  const [roundUpdatePending, setRoundUpdatePending] = useState(null)
+  const [roundUpdateMessage, setRoundUpdateMessage] = useState('')
 
   const socketRef = useRef(null)
   const stageRef = useRef(null)
@@ -242,6 +270,8 @@ function App() {
   const drawingRef = useRef(false)
   const previousPointRef = useRef(null)
   const segmentsRef = useRef([])
+  const pendingRoundRef = useRef(null)
+  const shareResetTimeoutRef = useRef(null)
 
   const joined = Boolean(game.roomCode)
   const canDraw = joined && game.phase === 'drawing' && game.drawerId === game.meId
@@ -253,6 +283,10 @@ function App() {
 
   useEffect(() => {
     return () => {
+      if (shareResetTimeoutRef.current) {
+        window.clearTimeout(shareResetTimeoutRef.current)
+      }
+
       socketRef.current?.disconnect()
     }
   }, [])
@@ -330,6 +364,13 @@ function App() {
     socket.on('roomState', (nextState) => {
       setGame(nextState)
       setJoinError('')
+
+      if (pendingRoundRef.current !== null && nextState.maxRounds === pendingRoundRef.current) {
+        setRoundUpdatePending(null)
+        setRoundUpdateMessage(`총 ${nextState.maxRounds}라운드로 적용됐습니다.`)
+        pendingRoundRef.current = null
+      }
+
       window.history.replaceState({}, '', `?room=${nextState.roomCode}`)
     })
 
@@ -362,6 +403,11 @@ function App() {
 
     socketRef.current?.disconnect()
     segmentsRef.current = []
+    setCopied(false)
+    setShareFeedback('')
+    setRoundUpdatePending(null)
+    setRoundUpdateMessage('')
+    pendingRoundRef.current = null
     setGame(emptyGame)
 
     const socket = io(getServerUrl(), {
@@ -376,11 +422,31 @@ function App() {
     })
   }
 
-  function handleShare() {
-    navigator.clipboard.writeText(shareUrl).then(() => {
+  async function handleShare() {
+    setShareFeedback('')
+
+    try {
+      const copiedToClipboard = await copyText(shareUrl)
+
+      if (!copiedToClipboard) {
+        throw new Error('copy-failed')
+      }
+
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
-    })
+      if (shareResetTimeoutRef.current) {
+        window.clearTimeout(shareResetTimeoutRef.current)
+      }
+
+      shareResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        shareResetTimeoutRef.current = null
+      }, 1600)
+      return
+    } catch {
+      setCopied(false)
+      setShareFeedback('자동 복사가 막혀서 수동 복사 창을 열었습니다.')
+      window.prompt('초대 링크를 복사해 주세요.', shareUrl)
+    }
   }
 
   function handleMessageSubmit(event) {
@@ -392,6 +458,30 @@ function App() {
 
     socketRef.current?.emit('sendMessage', draftMessage)
     setDraftMessage('')
+  }
+
+  function handleRoundChange(nextRound) {
+    if (!game.isHost || game.phase !== 'lobby') {
+      return
+    }
+
+    if (roundUpdatePending === nextRound || game.maxRounds === nextRound) {
+      return
+    }
+
+    setRoundUpdateMessage('')
+    setRoundUpdatePending(nextRound)
+    pendingRoundRef.current = nextRound
+
+    socketRef.current?.emit('setMaxRounds', nextRound, (response) => {
+      if (response?.ok) {
+        return
+      }
+
+      setRoundUpdatePending(null)
+      pendingRoundRef.current = null
+      setRoundUpdateMessage(response?.message || '라운드 수를 변경하지 못했습니다.')
+    })
   }
 
   function buildPoint(event) {
@@ -526,6 +616,7 @@ function App() {
             <button type="button" className="ghost-button" onClick={handleShare}>
               {copied ? '링크 복사됨' : '초대 링크 복사'}
             </button>
+            {shareFeedback ? <p className="muted-line share-feedback-line">{shareFeedback}</p> : null}
           </div>
         )}
       </section>
@@ -696,12 +787,30 @@ function App() {
           <article className="panel-card player-card">
             <div className="panel-header">
               <h3>플레이어</h3>
-              {game.canStart ? (
-                <button type="button" className="primary-button" onClick={() => socketRef.current?.emit('startGame')}>
+              <span className="muted-line">{game.players.length}명 참가 중</span>
+            </div>
+
+            {game.isHost && game.phase === 'lobby' ? (
+              <div className="host-controls-card">
+                <div className="tool-row compact">
+                  <span className="tool-label">호스트 컨트롤</span>
+                  <span className="tool-hint">플레이어 2명 이상부터 시작 가능</span>
+                </div>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => socketRef.current?.emit('startGame')}
+                  disabled={!game.canStart}
+                >
                   게임 시작
                 </button>
-              ) : null}
-            </div>
+                <p className="muted-line">
+                  {game.canStart
+                    ? '준비가 끝났습니다. 누르면 바로 첫 라운드가 시작됩니다.'
+                    : '최소 2명이 모이면 게임을 시작할 수 있습니다.'}
+                </p>
+              </div>
+            ) : null}
 
             {game.isHost && game.phase === 'lobby' ? (
               <div className="round-config-card">
@@ -715,12 +824,23 @@ function App() {
                       key={roundOption}
                       type="button"
                       className={game.maxRounds === roundOption ? 'size-chip active' : 'size-chip'}
-                      onClick={() => socketRef.current?.emit('setMaxRounds', roundOption)}
+                      onClick={() => handleRoundChange(roundOption)}
+                      disabled={roundUpdatePending === roundOption}
                     >
-                      {roundOption}R
+                      {roundUpdatePending === roundOption ? '적용 중' : `${roundOption}R`}
                     </button>
                   ))}
                 </div>
+                <p className="muted-line round-feedback-line">
+                  {roundUpdateMessage || `현재 ${game.maxRounds}라운드`}
+                </p>
+              </div>
+            ) : null}
+
+            {!game.isHost && game.phase === 'lobby' ? (
+              <div className="player-status-card">
+                <span className="tool-label">대기 중</span>
+                <p className="muted-line">호스트가 라운드 수를 정하고 게임을 시작하면 바로 입장합니다.</p>
               </div>
             ) : null}
 

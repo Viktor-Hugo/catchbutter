@@ -24,6 +24,13 @@ html,
 body,
 #root {
   min-height: 100%;
+  width: 100%;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body {
@@ -62,6 +69,7 @@ body::after {
 
 #root {
   width: min(1240px, 100%);
+  max-width: 100%;
   margin: 0 auto;
   padding: 18px;
 }
@@ -98,4 +106,16 @@ p {
 button,
 input {
   font: inherit;
+}
+
+@media (max-width: 720px) {
+  #root {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  #root {
+    padding: 10px;
+  }
 }

@@ -2,6 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-width: 0;
 }
 
 .hero-panel,
@@ -126,6 +127,11 @@ input:focus {
   align-items: center;
 }
 
+.share-feedback-line {
+  margin: 0;
+  grid-column: 1 / -1;
+}
+
 .summary-label,
 .tool-label,
 .muted-line {
@@ -143,6 +149,7 @@ input:focus {
 .game-grid {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 
 .board-card,
@@ -154,6 +161,7 @@ input:focus {
 .board-card {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .result-banner {
@@ -258,8 +266,11 @@ input:focus {
   position: relative;
   overflow: hidden;
   border-radius: 24px;
+  width: 100%;
+  max-width: 100%;
   aspect-ratio: 4 / 3;
-  min-height: clamp(300px, 54svh, 560px);
+  min-height: clamp(280px, 50svh, 560px);
+  max-height: min(64svh, 620px);
   background:
     radial-gradient(circle at top left, rgba(249, 115, 22, 0.12), transparent 26%),
     linear-gradient(180deg, #fffdfa 0%, #fff7ed 100%);
@@ -348,6 +359,7 @@ input:focus {
 .panel-card {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .round-config-card {
@@ -358,10 +370,27 @@ input:focus {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.host-controls-card,
+.player-status-card {
+  display: grid;
+  gap: 10px;
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.host-controls-card .primary-button {
+  width: 100%;
+}
+
 .round-option-grid {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.round-feedback-line {
+  min-height: 1.25rem;
 }
 
 .player-list {
@@ -394,6 +423,17 @@ input:focus {
 
 .chat-card {
   min-height: 420px;
+  min-width: 0;
+}
+
+.player-card {
+  align-self: start;
+}
+
+.player-card .player-list {
+  max-height: min(38svh, 360px);
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .message-list {
@@ -403,6 +443,7 @@ input:focus {
   max-height: min(34svh, 360px);
   min-height: 220px;
   padding-right: 4px;
+  min-width: 0;
 }
 
 .message-bubble {
@@ -505,6 +546,8 @@ input:focus {
   .player-card {
     grid-column: 2;
     grid-row: 2;
+    position: sticky;
+    top: 18px;
   }
 
   .chat-card {
@@ -529,36 +572,112 @@ input:focus {
 
 @media (max-width: 720px) {
   .app-shell {
-    gap: 14px;
+    gap: 12px;
   }
 
   .hero-panel,
   .board-card,
   .panel-card,
   .toolbar-card {
-    border-radius: 22px;
-    padding: 14px;
+    border-radius: 20px;
+    padding: 12px;
+  }
+
+  .hero-panel {
+    gap: 12px;
+    background: rgba(255, 252, 247, 0.94);
+    box-shadow: 0 12px 26px rgba(73, 42, 10, 0.08);
+  }
+
+  .hero-panel h1 {
+    margin-bottom: 4px;
+    font-size: clamp(1.35rem, 5vw, 1.7rem);
+  }
+
+  .hero-copy {
+    display: none;
+  }
+
+  .eyebrow {
+    margin-bottom: 6px;
+    font-size: 0.68rem;
+    letter-spacing: 0.18em;
+  }
+
+  .game-grid {
+    gap: 12px;
   }
 
   .canvas-stage {
-    min-height: clamp(280px, 50svh, 460px);
-    border-radius: 20px;
+    min-height: clamp(240px, 42dvh, 420px);
+    max-height: min(46dvh, 420px);
+    border-radius: 18px;
   }
 
   .board-card {
     grid-template-columns: 1fr;
+    gap: 12px;
+    padding-bottom: 12px;
   }
 
   .board-header {
     order: 1;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .board-header h2 {
+    margin: 4px 0 0;
+    font-size: 1.15rem;
+    line-height: 1.25;
+  }
+
+  .result-banner {
+    order: 2;
+    padding: 12px 14px;
+    gap: 4px;
   }
 
   .toolbar-card {
-    order: 2;
+    order: 3;
+    position: static;
+    z-index: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    gap: 8px;
+    padding: 8px;
+    margin-top: 0;
+    border-radius: 18px;
+    background: rgba(255, 252, 247, 0.96);
+    box-shadow: 0 18px 38px rgba(73, 42, 10, 0.14);
+  }
+
+  .toolbar-card .toolbar-section:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .word-choice-card {
+    order: 4;
+    padding: 12px;
+    scroll-margin-top: 12px;
   }
 
   .canvas-stage {
-    order: 3;
+    order: 5;
+  }
+
+  .toolbar-section {
+    gap: 6px;
+    min-width: 0;
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.86);
+    box-shadow: inset 0 0 0 1px rgba(20, 30, 45, 0.06);
+  }
+
+  .tool-row {
+    gap: 6px;
   }
 
   .chat-form,
@@ -575,32 +694,160 @@ input:focus {
   .tool-button,
   .size-chip,
   .color-chip {
-    min-height: 52px;
+    min-height: 44px;
+    border-radius: 14px;
+  }
+
+  .tool-button,
+  .size-chip {
+    padding: 0 10px;
+    font-size: 0.84rem;
+  }
+
+  .color-chip {
+    min-height: 28px;
+    border-radius: 10px;
+  }
+
+  .tool-chip-grid,
+  .size-grid {
+    gap: 6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tool-chip-grid,
   .round-option-grid,
-  .size-grid,
   .word-choice-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .palette-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
   }
 
-  .board-header,
+  .tool-label,
+  .tool-hint,
+  .muted-line,
+  .summary-label,
+  .status-pill {
+    font-size: 0.8rem;
+  }
+
   .panel-header {
     align-items: flex-start;
   }
 
+  .chat-card,
+  .player-card {
+    gap: 10px;
+  }
+
+  .chat-card,
+  .player-card,
+  .board-card,
+  .toolbar-card,
+  .round-config-card,
+  .host-controls-card,
+  .player-status-card,
+  .message-bubble,
+  .result-banner,
+  .word-choice-card {
+    width: 100%;
+    max-width: 100%;
+  }
+
   .message-list {
-    max-height: min(40svh, 320px);
+    max-height: min(28dvh, 260px);
+    min-height: 180px;
+  }
+
+  .chat-form {
+    position: static;
+    padding-top: 0;
+    padding-bottom: 0;
+    background: transparent;
+  }
+
+  .player-list {
+    gap: 8px;
+  }
+
+  .player-row,
+  .round-config-card,
+  .host-controls-card,
+  .player-status-card {
+    padding: 12px;
   }
 
   .canvas-overlay {
     left: 12px;
     right: 12px;
     bottom: 12px;
+    font-size: 0.84rem;
+  }
+
+  .status-pill {
+    padding: 8px 12px;
+  }
+
+  .word-choice-button {
+    min-height: 44px;
+    font-size: 0.9rem;
+  }
+
+  .round-option-grid {
+    gap: 8px;
+  }
+
+  .round-feedback-line {
+    margin-top: 2px;
+  }
+}
+
+@media (max-width: 560px) {
+  .hero-panel {
+    border-radius: 18px;
+  }
+
+  .room-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+  }
+
+  .room-summary .ghost-button {
+    grid-column: 1 / -1;
+  }
+
+  .board-card,
+  .panel-card {
+    border-radius: 18px;
+  }
+
+  .canvas-stage {
+    min-height: clamp(220px, 38dvh, 360px);
+    max-height: min(42dvh, 360px);
+  }
+
+  .toolbar-card {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 7px;
+  }
+
+  .toolbar-card .toolbar-section:first-child {
+    grid-column: auto;
+  }
+
+  .toolbar-section {
+    padding: 7px;
+  }
+
+  .palette-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .message-list {
+    max-height: min(24dvh, 220px);
   }
 }

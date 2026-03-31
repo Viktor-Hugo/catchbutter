@@ -19,8 +19,9 @@ const WORD_CHOICE_DURATION_MS = 15_000
 const ROUND_DURATION_MS = 80_000
 const INTERMISSION_MS = 4_000
 const MIN_ROUNDS = 2
-const MAX_ROUNDS = 6
+const DEFAULT_ROUNDS = 6
 const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
+const MAX_ROUNDS = ROUND_OPTIONS[ROUND_OPTIONS.length - 1] || DEFAULT_ROUNDS
 const MAX_MESSAGES = 40
 const rooms = new Map()
 
@@ -131,7 +132,7 @@ function getRoom(roomCode) {
       drawerId: null,
       phase: 'lobby',
       round: 0,
-      maxRounds: MAX_ROUNDS,
+      maxRounds: DEFAULT_ROUNDS,
       timeLeft: 0,
       word: null,
       wordChoices: [],
@@ -430,22 +431,25 @@ io.on('connection', (socket) => {
     startDrawingPhase(room, chosenWord)
   })
 
-  socket.on('setMaxRounds', (nextValue) => {
+  socket.on('setMaxRounds', (nextValue, callback) => {
     const room = rooms.get(socket.data.roomCode)
 
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') {
+      callback?.({ ok: false, message: '로비에서 호스트만 라운드 수를 바꿀 수 있습니다.' })
       return
     }
 
     const parsedValue = Number(nextValue)
 
     if (!ROUND_OPTIONS.includes(parsedValue)) {
+      callback?.({ ok: false, message: '지원하지 않는 라운드 수입니다.' })
       return
     }
 
-    room.maxRounds = Math.max(MIN_ROUNDS, Math.min(10, parsedValue))
+    room.maxRounds = Math.max(MIN_ROUNDS, Math.min(MAX_ROUNDS, parsedValue))
     room.resultText = `호스트가 총 ${room.maxRounds}라운드로 설정했습니다.`
     emitRoomState(room)
+    callback?.({ ok: true, maxRounds: room.maxRounds })
   })
 
   socket.on('sendMessage', (rawText) => {
