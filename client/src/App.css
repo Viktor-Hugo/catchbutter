@@ -3,6 +3,7 @@
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  min-height: var(--app-visible-height, 100svh);
 }
 
 .hero-panel,
@@ -201,6 +202,24 @@ input:focus {
   background: rgba(15, 118, 110, 0.12);
 }
 
+.round-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.round-status-line {
+  margin: 0;
+}
+
+.skip-vote-button.active {
+  background: rgba(15, 118, 110, 0.18);
+  border-color: rgba(15, 118, 110, 0.24);
+  color: #115e59;
+}
+
 .word-choice-card {
   display: grid;
   gap: 10px;
@@ -269,8 +288,8 @@ input:focus {
   width: 100%;
   max-width: 100%;
   aspect-ratio: 4 / 3;
-  min-height: clamp(280px, 50svh, 560px);
-  max-height: min(64svh, 620px);
+  min-height: clamp(300px, calc(var(--app-visible-height, 100svh) * 0.48), 620px);
+  max-height: min(calc(var(--app-visible-height, 100svh) * 0.68), 680px);
   background:
     radial-gradient(circle at top left, rgba(249, 115, 22, 0.12), transparent 26%),
     linear-gradient(180deg, #fffdfa 0%, #fff7ed 100%);
@@ -281,23 +300,23 @@ input:focus {
   height: 100%;
   display: block;
   touch-action: none;
-}
-
-.canvas-overlay {
-  position: absolute;
-  inset: auto 14px 14px;
-  border-radius: 16px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.82);
-  color: var(--ink-soft);
-  font-size: 0.92rem;
-  backdrop-filter: blur(12px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .toolbar-card {
   display: grid;
   gap: 12px;
   padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+
+.toolbar-header-strip {
+  display: grid;
+  gap: 10px;
+}
+
+.toolbar-toggle-row {
+  display: none;
 }
 
 .toolbar-section {
@@ -424,10 +443,28 @@ input:focus {
 .chat-card {
   min-height: 420px;
   min-width: 0;
+  scroll-margin-top: 12px;
 }
 
 .player-card {
   align-self: start;
+}
+
+.mobile-lobby-card {
+  display: none;
+}
+
+.mobile-board-shortcut {
+  display: none;
+}
+
+.chat-header-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-nav-button {
+  white-space: nowrap;
 }
 
 .player-card .player-list {
@@ -638,12 +675,21 @@ input:focus {
     gap: 4px;
   }
 
+  .round-action-row {
+    gap: 8px;
+  }
+
+  .skip-vote-button {
+    width: 100%;
+  }
+
   .toolbar-card {
     order: 3;
-    position: static;
+    position: sticky;
+    bottom: calc(env(safe-area-inset-bottom) + 10px);
     z-index: auto;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     overflow: visible;
     gap: 8px;
     padding: 8px;
@@ -651,10 +697,15 @@ input:focus {
     border-radius: 18px;
     background: rgba(255, 252, 247, 0.96);
     box-shadow: 0 18px 38px rgba(73, 42, 10, 0.14);
+    z-index: 4;
   }
 
-  .toolbar-card .toolbar-section:first-child {
-    grid-column: 1 / -1;
+  .compact-toolbar .toolbar-section {
+    display: none;
+  }
+
+  .compact-toolbar .toolbar-section.active {
+    display: grid;
   }
 
   .word-choice-card {
@@ -683,6 +734,15 @@ input:focus {
   .chat-form,
   .room-code-row {
     grid-template-columns: 1fr;
+  }
+
+  .toolbar-toggle-row {
+    display: grid;
+    gap: 8px;
+  }
+
+  .toolbar-toggle-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .room-summary {
@@ -743,6 +803,29 @@ input:focus {
     gap: 10px;
   }
 
+  .mobile-lobby-card,
+  .mobile-board-shortcut {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobile-board-shortcut {
+    padding: 2px 0 0;
+  }
+
+  .mobile-board-shortcut .ghost-button {
+    width: 100%;
+  }
+
+  .chat-card {
+    min-height: min(34dvh, 320px);
+  }
+
+  .mobile-chat-card {
+    position: relative;
+    z-index: 1;
+  }
+
   .chat-card,
   .player-card,
   .board-card,
@@ -758,15 +841,16 @@ input:focus {
   }
 
   .message-list {
-    max-height: min(28dvh, 260px);
-    min-height: 180px;
+    max-height: min(24dvh, 220px);
+    min-height: 144px;
   }
 
   .chat-form {
-    position: static;
-    padding-top: 0;
-    padding-bottom: 0;
-    background: transparent;
+    position: sticky;
+    bottom: calc(env(safe-area-inset-bottom) + var(--app-viewport-top, 0px));
+    padding-top: 8px;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 4px);
+    background: linear-gradient(180deg, rgba(255, 252, 247, 0), rgba(255, 252, 247, 0.98) 42%);
   }
 
   .player-list {
@@ -778,13 +862,6 @@ input:focus {
   .host-controls-card,
   .player-status-card {
     padding: 12px;
-  }
-
-  .canvas-overlay {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    font-size: 0.84rem;
   }
 
   .status-pill {
@@ -825,18 +902,13 @@ input:focus {
   }
 
   .canvas-stage {
-    min-height: clamp(220px, 38dvh, 360px);
-    max-height: min(42dvh, 360px);
+    min-height: clamp(260px, calc(var(--app-visible-height, 100svh) * 0.4), 420px);
+    max-height: min(calc(var(--app-visible-height, 100svh) * 0.52), 420px);
   }
 
   .toolbar-card {
-    grid-template-columns: 1fr;
     gap: 6px;
     padding: 7px;
-  }
-
-  .toolbar-card .toolbar-section:first-child {
-    grid-column: auto;
   }
 
   .toolbar-section {
@@ -848,6 +920,6 @@ input:focus {
   }
 
   .message-list {
-    max-height: min(24dvh, 220px);
+    max-height: min(22dvh, 180px);
   }
 }

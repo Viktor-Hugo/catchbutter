@@ -7,6 +7,8 @@
   --accent-strong: #c2410c;
   --ink: #1d2733;
   --ink-soft: #54606f;
+  --app-visible-height: 100svh;
+  --app-viewport-top: 0px;
   font: 16px/1.5 'Instrument Sans', 'Noto Sans KR', sans-serif;
   color: var(--ink);
   background: var(--page-bg);

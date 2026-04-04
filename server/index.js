@@ -16,13 +16,14 @@ const __dirname = path.dirname(__filename)
 const PORT = Number(process.env.PORT || 3001)
 const HOST = process.env.HOST || '0.0.0.0'
 const WORD_CHOICE_DURATION_MS = 15_000
-const ROUND_DURATION_MS = 80_000
 const INTERMISSION_MS = 4_000
 const MIN_ROUNDS = 2
 const DEFAULT_ROUNDS = 6
 const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
 const MAX_ROUNDS = ROUND_OPTIONS[ROUND_OPTIONS.length - 1] || DEFAULT_ROUNDS
 const MAX_MESSAGES = 40
+const CORRECT_GUESS_POINTS = 60
+const DRAWER_CORRECT_BONUS = 30
 const rooms = new Map()
 
 const app = express()
@@ -143,6 +144,8 @@ function getRoom(roomCode) {
       roundEndsAt: null,
       nextRoundAt: null,
       wordDeck: createWordDeck(),
+      correctGuesserIds: new Set(),
+      skipVotes: new Set(),
       players: [],
     })
   }
@@ -154,25 +157,65 @@ function getPlayer(room, playerId) {
   return room.players.find((player) => player.id === playerId) || null
 }
 
-function pushSystemMessage(room, text) {
-  room.messages.push(createMessage('system', '시스템', text))
+function pushMessage(room, type, sender, text) {
+  room.messages.push(createMessage(type, sender, text))
   room.messages = room.messages.slice(-MAX_MESSAGES)
 }
 
-function pushCorrectMessage(room, winner, word) {
-  room.messages.push(createMessage('correct', '정답', `${winner} 님이 ${word}를 맞혔습니다!`))
-  room.messages = room.messages.slice(-MAX_MESSAGES)
+function pushSystemMessage(room, text) {
+  pushMessage(room, 'system', '시스템', text)
+}
+
+function pushCorrectMessage(room, winner) {
+  pushMessage(room, 'correct', '정답', `${winner} 님이 정답을 맞혔습니다!`)
 }
 
 function pushChatMessage(room, sender, text) {
-  room.messages.push(createMessage('chat', sender, text))
-  room.messages = room.messages.slice(-MAX_MESSAGES)
+  pushMessage(room, 'chat', sender, text)
+}
+
+function getSkipVotesNeeded(room) {
+  return room.players.filter((player) => player.id !== room.drawerId).length
+}
+
+function getGuessersNeeded(room) {
+  return room.players.filter((player) => player.id !== room.drawerId).length
+}
+
+function resetRoundProgress(room) {
+  room.correctGuesserIds.clear()
+  room.skipVotes.clear()
+}
+
+function updateDrawingStatus(room, latestCorrectPlayer = null) {
+  const skipVotesNeeded = getSkipVotesNeeded(room)
+  const skipVotesCount = room.skipVotes.size
+  const correctCount = room.correctGuesserIds.size
+  const guessersNeeded = getGuessersNeeded(room)
+
+  if (correctCount > 0) {
+    const correctLead =
+      correctCount === 1 && latestCorrectPlayer
+        ? `${latestCorrectPlayer.nickname} 님이 정답을 맞혔습니다.`
+        : `현재 ${correctCount}명이 정답을 맞혔습니다.`
+
+    const completionHint =
+      correctCount >= guessersNeeded && guessersNeeded > 0
+        ? '모든 참가자가 정답을 맞혀 곧 다음 라운드로 넘어갑니다.'
+        : `그림은 계속 진행됩니다. 넘기기 ${skipVotesCount}/${skipVotesNeeded}`
+
+    room.resultText = `${correctLead} ${completionHint}`
+    return
+  }
+
+  room.resultText = `시간 제한 없이 진행 중입니다. 넘기기 ${skipVotesCount}/${skipVotesNeeded}`
 }
 
 function serializeRoomForPlayer(room, playerId) {
   const me = getPlayer(room, playerId)
   const drawer = getPlayer(room, room.drawerId)
-  const revealAnswer = room.phase === 'round-end' || playerId === room.drawerId
+  const hasGuessedCorrectly = room.correctGuesserIds.has(playerId)
+  const revealAnswer = room.phase === 'round-end' || playerId === room.drawerId || hasGuessedCorrectly
   const answer =
     room.phase === 'choosing'
       ? playerId === room.drawerId
@@ -196,6 +239,13 @@ function serializeRoomForPlayer(room, playerId) {
     drawerName: drawer?.nickname || '대기 중',
     isHost: room.hostId === playerId,
     canStart: room.hostId === playerId && room.phase === 'lobby' && room.players.length >= 2,
+    hasGuessedCorrectly,
+    guessedCount: room.correctGuesserIds.size,
+    canVoteSkip: room.phase === 'drawing' && playerId !== room.drawerId,
+    canFinishRound: room.phase === 'drawing' && playerId === room.drawerId,
+    hasSkipVoted: room.skipVotes.has(playerId),
+    skipVotesCount: room.skipVotes.size,
+    skipVotesNeeded: getSkipVotesNeeded(room),
     players: room.players.map((player) => ({
       id: player.id,
       nickname: player.nickname,
@@ -230,6 +280,7 @@ function resetToLobby(room, message) {
   room.roundEndsAt = null
   room.nextRoundAt = null
   room.wordDeck = createWordDeck()
+  resetRoundProgress(room)
   emitCanvasState(room)
   emitRoomState(room)
 }
@@ -272,6 +323,7 @@ function beginRound(room) {
   room.chooseEndsAt = Date.now() + WORD_CHOICE_DURATION_MS
   room.roundEndsAt = null
   room.nextRoundAt = null
+  resetRoundProgress(room)
 
   pushSystemMessage(room, `라운드 ${room.round} 시작. ${nextDrawer.nickname} 님이 단어를 고르는 중입니다.`)
   emitCanvasState(room)
@@ -284,26 +336,46 @@ function startDrawingPhase(room, chosenWord) {
   room.word = chosenWord
   room.wordChoices = []
   room.phase = 'drawing'
-  room.timeLeft = Math.ceil(ROUND_DURATION_MS / 1000)
-  room.resultText = `${drawer?.nickname || '출제자'} 님이 그림을 그리는 중입니다.`
+  room.timeLeft = null
   room.chooseEndsAt = null
-  room.roundEndsAt = Date.now() + ROUND_DURATION_MS
+  room.roundEndsAt = null
+  resetRoundProgress(room)
+  updateDrawingStatus(room)
 
-  pushSystemMessage(room, `제시어가 선택됐습니다. ${drawer?.nickname || '출제자'} 님이 그림을 그립니다.`)
+  pushSystemMessage(room, `제시어가 선택됐습니다. ${drawer?.nickname || '출제자'} 님이 시간 제한 없이 그림을 그립니다.`)
   emitRoomState(room)
 }
 
-function finishRound(room, winnerId, reason) {
-  if (room.phase !== 'drawing') {
+function registerCorrectGuess(room, winnerId) {
+  if (room.phase !== 'drawing' || room.correctGuesserIds.has(winnerId) || room.drawerId === winnerId) {
     return
   }
 
-  const winner = winnerId ? getPlayer(room, winnerId) : null
+  const winner = getPlayer(room, winnerId)
   const drawer = getPlayer(room, room.drawerId)
 
-  if (winner && drawer) {
-    winner.score += Math.max(40, room.timeLeft * 2)
-    drawer.score += 60
+  if (!winner || !drawer) {
+    return
+  }
+
+  room.correctGuesserIds.add(winner.id)
+  winner.score += CORRECT_GUESS_POINTS
+  drawer.score += DRAWER_CORRECT_BONUS
+
+  pushCorrectMessage(room, winner.nickname)
+
+  if (getGuessersNeeded(room) > 0 && room.correctGuesserIds.size >= getGuessersNeeded(room)) {
+    finishRound(room, 'all-correct')
+    return
+  }
+
+  updateDrawingStatus(room, winner)
+  emitRoomState(room)
+}
+
+function finishRound(room, reason) {
+  if (room.phase !== 'drawing') {
+    return
   }
 
   room.phase = 'round-end'
@@ -311,18 +383,48 @@ function finishRound(room, winnerId, reason) {
   room.roundEndsAt = null
   room.nextRoundAt = Date.now() + INTERMISSION_MS
   room.resultText =
-    winner && drawer
-      ? `${winner.nickname} 정답! 제시어는 \"${room.word}\"였습니다.`
-      : reason === 'drawer-left'
+    reason === 'drawer-left'
         ? `그리는 사람이 나가서 라운드가 종료됐습니다. 제시어는 \"${room.word}\"였습니다.`
-        : `시간 종료. 제시어는 \"${room.word}\"였습니다.`
-
-  if (winner && drawer) {
-    pushCorrectMessage(room, winner.nickname, room.word)
-  }
+        : reason === 'drawer-skip'
+          ? `출제자가 다음 라운드로 넘겼습니다. 제시어는 \"${room.word}\"였습니다.`
+        : reason === 'all-correct'
+          ? `모든 참가자가 정답을 맞혀 다음 라운드로 넘어갑니다. 제시어는 \"${room.word}\"였습니다.`
+        : reason === 'skip-vote'
+          ? `모든 참가자가 넘기기에 동의해 다음 라운드로 넘어갑니다. 제시어는 \"${room.word}\"였습니다.`
+          : `라운드가 종료됐습니다. 제시어는 \"${room.word}\"였습니다.`
 
   pushSystemMessage(room, room.resultText)
   emitRoomState(room)
+}
+
+function setSkipVote(room, playerId, shouldSkip) {
+  if (room.phase !== 'drawing' || room.drawerId === playerId) {
+    return
+  }
+
+  if (shouldSkip) {
+    room.skipVotes.add(playerId)
+  } else {
+    room.skipVotes.delete(playerId)
+  }
+
+  const skipVotesNeeded = getSkipVotesNeeded(room)
+
+  if (skipVotesNeeded > 0 && room.skipVotes.size >= skipVotesNeeded) {
+    finishRound(room, 'skip-vote')
+    return
+  }
+
+  updateDrawingStatus(room)
+  emitRoomState(room)
+}
+
+function finishRoundByDrawer(room, playerId) {
+  if (room.phase !== 'drawing' || room.drawerId !== playerId) {
+    return
+  }
+
+  finishRound(room, 'drawer-skip')
 }
 
 function startGame(room) {
@@ -462,12 +564,32 @@ io.on('connection', (socket) => {
     }
 
     if (room.phase === 'drawing' && socket.id !== room.drawerId && normalizeText(text) === normalizeText(room.word)) {
-      finishRound(room, socket.id, 'correct')
+      registerCorrectGuess(room, socket.id)
       return
     }
 
     pushChatMessage(room, player.nickname, text)
     emitRoomState(room)
+  })
+
+  socket.on('setSkipVote', (shouldSkip) => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room) {
+      return
+    }
+
+    setSkipVote(room, socket.id, Boolean(shouldSkip))
+  })
+
+  socket.on('finishRound', () => {
+    const room = rooms.get(socket.data.roomCode)
+
+    if (!room) {
+      return
+    }
+
+    finishRoundByDrawer(room, socket.id)
   })
 
   socket.on('canvasAction', (action) => {
@@ -517,6 +639,8 @@ io.on('connection', (socket) => {
 
     const leavingPlayer = getPlayer(room, socket.id)
     room.players = room.players.filter((player) => player.id !== socket.id)
+    room.correctGuesserIds.delete(socket.id)
+    room.skipVotes.delete(socket.id)
 
     if (!room.players.length) {
       rooms.delete(room.code)
@@ -538,13 +662,27 @@ io.on('connection', (socket) => {
     }
 
     if (room.drawerId === socket.id && room.phase === 'drawing') {
-      finishRound(room, null, 'drawer-left')
+      finishRound(room, 'drawer-left')
       return
     }
 
     if (room.players.length < 2 && room.phase !== 'lobby') {
       resetToLobby(room, '플레이어 수가 부족해 로비로 돌아갑니다.')
       return
+    }
+
+    if (room.phase === 'drawing' && getSkipVotesNeeded(room) > 0 && room.skipVotes.size >= getSkipVotesNeeded(room)) {
+      finishRound(room, 'skip-vote')
+      return
+    }
+
+    if (room.phase === 'drawing' && getGuessersNeeded(room) > 0 && room.correctGuesserIds.size >= getGuessersNeeded(room)) {
+      finishRound(room, 'all-correct')
+      return
+    }
+
+    if (room.phase === 'drawing') {
+      updateDrawingStatus(room)
     }
 
     emitRoomState(room)
@@ -565,19 +703,6 @@ setInterval(() => {
 
       if (room.chooseEndsAt <= now) {
         startDrawingPhase(room, room.wordChoices[0] || pickWord(room))
-      }
-    }
-
-    if (room.phase === 'drawing' && room.roundEndsAt) {
-      const nextTimeLeft = Math.max(0, Math.ceil((room.roundEndsAt - now) / 1000))
-
-      if (nextTimeLeft !== room.timeLeft) {
-        room.timeLeft = nextTimeLeft
-        emitRoomState(room)
-      }
-
-      if (room.roundEndsAt <= now) {
-        finishRound(room, null, 'timeout')
       }
     }
 

@@ -19,10 +19,32 @@ const PALETTE = [
 const BRUSHES = [4, 8, 12, 18]
 const DEFAULT_ROUNDS = 6
 const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
+const MOBILE_MEDIA_QUERY = '(max-width: 720px)'
+
+const TOOLBAR_SECTION_OPTIONS = [
+  { key: 'tools', label: '도구' },
+  { key: 'colors', label: '색상' },
+  { key: 'sizes', label: '굵기' },
+]
+const LEAVE_GUARD_MESSAGE = '지금 나가면 현재 방에서 연결이 끊깁니다. 정말 나가시겠습니까?'
+const LEAVE_GUARD_HASH = '#catchbutter-leave-guard'
+
+function createRoomCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase()
+}
+
+function syncViewportMetrics() {
+  const viewport = window.visualViewport
+  const viewportHeight = Math.round(viewport?.height || window.innerHeight)
+  const viewportTop = Math.max(0, Math.round(viewport?.offsetTop || 0))
+
+  document.documentElement.style.setProperty('--app-visible-height', `${viewportHeight}px`)
+  document.documentElement.style.setProperty('--app-viewport-top', `${viewportTop}px`)
+}
 
 const initialRoomCode = (() => {
   const roomFromQuery = new URLSearchParams(window.location.search).get('room')
-  return roomFromQuery?.toUpperCase().slice(0, 6) || Math.random().toString(36).slice(2, 8).toUpperCase()
+  return roomFromQuery?.toUpperCase().slice(0, 6) || createRoomCode()
 })()
 
 const emptyGame = {
@@ -39,6 +61,13 @@ const emptyGame = {
   drawerName: '대기 중',
   isHost: false,
   canStart: false,
+  hasGuessedCorrectly: false,
+  guessedCount: 0,
+  canVoteSkip: false,
+  canFinishRound: false,
+  hasSkipVoted: false,
+  skipVotesCount: 0,
+  skipVotesNeeded: 0,
   players: [],
   messages: [],
 }
@@ -59,6 +88,12 @@ function getServerUrl() {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
+}
+
+function buildRoomLocation(roomCode, withGuardHash = false) {
+  const search = roomCode ? `?room=${roomCode}` : ''
+  const hash = withGuardHash ? LEAVE_GUARD_HASH : ''
+  return `${window.location.pathname}${search}${hash}`
 }
 
 async function copyText(value) {
@@ -102,7 +137,7 @@ function getPhaseLabel(phase) {
 }
 
 function getResultTone(game) {
-  if (game.phase === 'round-end' && game.resultText.includes('정답!')) {
+  if (isCorrectRoundEnd(game)) {
     return 'correct'
   }
 
@@ -111,6 +146,10 @@ function getResultTone(game) {
   }
 
   return 'default'
+}
+
+function isCorrectRoundEnd(game) {
+  return game.phase === 'round-end' && game.resultText.includes('정답!')
 }
 
 function hexToRgba(hexColor) {
@@ -262,27 +301,63 @@ function App() {
   const [shareFeedback, setShareFeedback] = useState('')
   const [roundUpdatePending, setRoundUpdatePending] = useState(null)
   const [roundUpdateMessage, setRoundUpdateMessage] = useState('')
+  const [activeToolbarSection, setActiveToolbarSection] = useState('tools')
+  const [isCompactLayout, setIsCompactLayout] = useState(() => window.matchMedia(MOBILE_MEDIA_QUERY).matches)
 
   const socketRef = useRef(null)
+  const boardCardRef = useRef(null)
   const stageRef = useRef(null)
   const canvasRef = useRef(null)
+  const chatCardRef = useRef(null)
+  const chatInputRef = useRef(null)
   const messagesRef = useRef(null)
   const drawingRef = useRef(false)
   const previousPointRef = useRef(null)
   const segmentsRef = useRef([])
   const pendingRoundRef = useRef(null)
   const shareResetTimeoutRef = useRef(null)
+  const leavingRoomRef = useRef(false)
 
   const joined = Boolean(game.roomCode)
   const canDraw = joined && game.phase === 'drawing' && game.drawerId === game.meId
   const canChooseWord = joined && game.phase === 'choosing' && game.drawerId === game.meId
   const resultTone = getResultTone(game)
+  const timerLabel = game.phase === 'drawing' ? '무제한' : `${game.timeLeft}s`
   const shareUrl = game.roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${game.roomCode}`
     : `${window.location.origin}${window.location.pathname}`
 
   useEffect(() => {
+    syncViewportMetrics()
+
+    const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY)
+    const handleMediaChange = (event) => {
+      setIsCompactLayout(event.matches)
+    }
+    const handleViewportChange = () => {
+      syncViewportMetrics()
+    }
+
+    setIsCompactLayout(mediaQuery.matches)
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleMediaChange)
+    } else {
+      mediaQuery.addListener(handleMediaChange)
+    }
+    window.addEventListener('resize', handleViewportChange)
+    window.visualViewport?.addEventListener('resize', handleViewportChange)
+    window.visualViewport?.addEventListener('scroll', handleViewportChange)
+
     return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handleMediaChange)
+      } else {
+        mediaQuery.removeListener(handleMediaChange)
+      }
+      window.removeEventListener('resize', handleViewportChange)
+      window.visualViewport?.removeEventListener('resize', handleViewportChange)
+      window.visualViewport?.removeEventListener('scroll', handleViewportChange)
+
       if (shareResetTimeoutRef.current) {
         window.clearTimeout(shareResetTimeoutRef.current)
       }
@@ -290,6 +365,83 @@ function App() {
       socketRef.current?.disconnect()
     }
   }, [])
+
+  useEffect(() => {
+    if (!joined) {
+      leavingRoomRef.current = false
+      setActiveToolbarSection('tools')
+    }
+  }, [joined])
+
+  function leaveCurrentRoom() {
+    socketRef.current?.disconnect()
+    socketRef.current = null
+    segmentsRef.current = []
+    drawingRef.current = false
+    previousPointRef.current = null
+    setDraftMessage('')
+    setJoinError('')
+    setConnectionLabel('오프라인')
+    setCopied(false)
+    setShareFeedback('')
+    setRoundUpdatePending(null)
+    setRoundUpdateMessage('')
+    pendingRoundRef.current = null
+    setGame(emptyGame)
+    window.history.replaceState({}, '', buildRoomLocation(''))
+  }
+
+  useEffect(() => {
+    if (!joined) {
+      return undefined
+    }
+
+    leavingRoomRef.current = false
+
+    const pushGuardState = () => {
+      window.history.pushState(
+        {
+          ...(window.history.state || {}),
+          catchButterGuard: true,
+        },
+        '',
+        buildRoomLocation(game.roomCode, true),
+      )
+    }
+
+    if (window.location.hash !== LEAVE_GUARD_HASH) {
+      pushGuardState()
+    }
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    const handleHashChange = () => {
+      if (leavingRoomRef.current || window.location.hash === LEAVE_GUARD_HASH) {
+        return
+      }
+
+      const shouldLeave = window.confirm(LEAVE_GUARD_MESSAGE)
+
+      if (!shouldLeave) {
+        pushGuardState()
+        return
+      }
+
+      leavingRoomRef.current = true
+      leaveCurrentRoom()
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('hashchange', handleHashChange)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('hashchange', handleHashChange)
+    }
+  }, [joined, game.roomCode])
 
   useEffect(() => {
     if (!game.messages.length || !messagesRef.current) {
@@ -371,7 +523,11 @@ function App() {
         pendingRoundRef.current = null
       }
 
-      window.history.replaceState({}, '', `?room=${nextState.roomCode}`)
+      window.history.replaceState(
+        { ...(window.history.state || {}) },
+        '',
+        buildRoomLocation(nextState.roomCode, window.location.hash === LEAVE_GUARD_HASH),
+      )
     })
 
     socket.on('canvasState', (segments) => {
@@ -380,7 +536,7 @@ function App() {
     })
 
     socket.on('canvasAction', (segment) => {
-      segmentsRef.current = [...segmentsRef.current, segment]
+      segmentsRef.current.push(segment)
       applyCanvasActionToCanvas(canvasRef.current, segment)
     })
   }
@@ -460,6 +616,12 @@ function App() {
     setDraftMessage('')
   }
 
+  function appendCanvasAction(segment) {
+    segmentsRef.current.push(segment)
+    applyCanvasActionToCanvas(canvasRef.current, segment)
+    socketRef.current?.emit('canvasAction', segment)
+  }
+
   function handleRoundChange(nextRound) {
     if (!game.isHost || game.phase !== 'lobby') {
       return
@@ -499,6 +661,8 @@ function App() {
       return
     }
 
+    event.preventDefault()
+
     if (toolMode === 'fill') {
       const segment = {
         kind: 'fill',
@@ -506,9 +670,7 @@ function App() {
         color: brushColor,
       }
 
-      segmentsRef.current = [...segmentsRef.current, segment]
-      applyCanvasActionToCanvas(canvasRef.current, segment)
-      socketRef.current?.emit('canvasAction', segment)
+      appendCanvasAction(segment)
       return
     }
 
@@ -521,6 +683,8 @@ function App() {
     if (!drawingRef.current || !canDraw) {
       return
     }
+
+    event.preventDefault()
 
     const nextPoint = buildPoint(event)
     const previousPoint = previousPointRef.current
@@ -538,9 +702,7 @@ function App() {
       mode: toolMode,
     }
 
-    segmentsRef.current = [...segmentsRef.current, segment]
-    applyCanvasActionToCanvas(canvasRef.current, segment)
-    socketRef.current?.emit('canvasAction', segment)
+    appendCanvasAction(segment)
     previousPointRef.current = nextPoint
   }
 
@@ -548,8 +710,51 @@ function App() {
     if (drawingRef.current) {
       drawingRef.current = false
       previousPointRef.current = null
-      event.currentTarget.releasePointerCapture(event.pointerId)
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
     }
+  }
+
+  function scrollToSection(target) {
+    if (!isCompactLayout) {
+      return
+    }
+
+    const targetRef = target === 'chat' ? chatCardRef.current : boardCardRef.current
+    targetRef?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function focusChatInput() {
+    window.setTimeout(() => {
+      chatInputRef.current?.focus()
+    }, 180)
+  }
+
+  function handleChatJump() {
+    scrollToSection('chat')
+    focusChatInput()
+  }
+
+  function handleBoardJump() {
+    scrollToSection('board')
+  }
+
+  function handleSkipVoteToggle() {
+    if (!game.canVoteSkip) {
+      return
+    }
+
+    socketRef.current?.emit('setSkipVote', !game.hasSkipVoted)
+  }
+
+  function handleDrawerFinishRound() {
+    if (!game.canFinishRound) {
+      return
+    }
+
+    socketRef.current?.emit('finishRound')
   }
 
   return (
@@ -586,7 +791,7 @@ function App() {
                 <button
                   type="button"
                   className="ghost-button"
-                  onClick={() => setRoomCode(Math.random().toString(36).slice(2, 8).toUpperCase())}
+                  onClick={() => setRoomCode(createRoomCode())}
                 >
                   새 코드
                 </button>
@@ -611,7 +816,7 @@ function App() {
             </div>
             <div>
               <span className="summary-label">Timer</span>
-              <strong>{game.timeLeft}s</strong>
+              <strong>{timerLabel}</strong>
             </div>
             <button type="button" className="ghost-button" onClick={handleShare}>
               {copied ? '링크 복사됨' : '초대 링크 복사'}
@@ -623,7 +828,7 @@ function App() {
 
       {joined ? (
         <section className="game-grid">
-          <article className="board-card">
+          <article className="board-card" ref={boardCardRef}>
             <header className="board-header">
               <div>
                 <p className="eyebrow">Round {game.round || 0} / {game.maxRounds}</p>
@@ -635,9 +840,37 @@ function App() {
             </header>
 
             <div className={`result-banner ${resultTone}`}>
-              <strong>{game.phase === 'round-end' && game.resultText.includes('정답!') ? '정답 맞힘' : '안내'}</strong>
+              <strong>{isCorrectRoundEnd(game) ? '정답 맞힘' : '안내'}</strong>
               <span>{game.resultText}</span>
             </div>
+
+            {game.phase === 'drawing' ? (
+              <div className="round-action-row">
+                <p className="muted-line round-status-line">
+                  {game.guessedCount > 0 ? `정답 ${game.guessedCount}명` : '아직 정답자가 없습니다.'}
+                  {game.skipVotesNeeded > 0 ? ` · 넘기기 ${game.skipVotesCount}/${game.skipVotesNeeded}` : ''}
+                  {game.guessedCount >= game.skipVotesNeeded && game.skipVotesNeeded > 0 ? ' · 모두 맞혀서 자동 진행됩니다.' : ''}
+                </p>
+                {game.canFinishRound ? (
+                  <button
+                    type="button"
+                    className="primary-button skip-vote-button"
+                    onClick={handleDrawerFinishRound}
+                  >
+                    다음 라운드로 넘기기
+                  </button>
+                ) : null}
+                {game.canVoteSkip ? (
+                  <button
+                    type="button"
+                    className={game.hasSkipVoted ? 'ghost-button skip-vote-button active' : 'ghost-button skip-vote-button'}
+                    onClick={handleSkipVoteToggle}
+                  >
+                    {game.hasSkipVoted ? '넘기기 취소' : '넘기기'}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {canChooseWord ? (
               <div className="word-choice-card">
@@ -669,11 +902,38 @@ function App() {
                 onPointerLeave={handlePointerUp}
                 onPointerCancel={handlePointerUp}
               />
-              {!canDraw ? <div className="canvas-overlay">정답을 맞히거나 채팅으로 분위기를 띄워보세요.</div> : null}
             </div>
 
-            <div className="toolbar-card">
-              <div className="toolbar-section">
+            {isCompactLayout ? (
+              <div className="mobile-board-shortcut">
+                <button type="button" className="ghost-button" onClick={handleChatJump}>
+                  채팅으로 바로 이동
+                </button>
+                <p className="muted-line">채팅은 항상 열려 있고, 누르면 입력창까지 바로 내려갑니다.</p>
+              </div>
+            ) : null}
+
+            <div className={isCompactLayout ? 'toolbar-card compact-toolbar' : 'toolbar-card'}>
+              <div className="toolbar-header-strip">
+                <div className="tool-row compact">
+                  <span className="tool-label">출제 도구</span>
+                  <span className="tool-hint">{canDraw ? '하단에서 빠르게 전환' : '출제자 턴에만 활성화'}</span>
+                </div>
+                <div className="toolbar-toggle-row">
+                  {TOOLBAR_SECTION_OPTIONS.map((section) => (
+                    <button
+                      key={section.key}
+                      type="button"
+                      className={activeToolbarSection === section.key ? 'size-chip active' : 'size-chip'}
+                      onClick={() => setActiveToolbarSection(section.key)}
+                    >
+                      {section.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className={activeToolbarSection === 'tools' ? 'toolbar-section active' : 'toolbar-section'}>
                 <div className="tool-row compact">
                   <span className="tool-label">도구</span>
                   <span className="tool-hint">출제자만 사용 가능</span>
@@ -714,7 +974,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="toolbar-section">
+              <div className={activeToolbarSection === 'colors' ? 'toolbar-section active' : 'toolbar-section'}>
                 <div className="tool-row compact">
                   <span className="tool-label">색상</span>
                   <span className="tool-hint">{PALETTE.length}가지</span>
@@ -734,7 +994,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="toolbar-section">
+              <div className={activeToolbarSection === 'sizes' ? 'toolbar-section active' : 'toolbar-section'}>
                 <div className="tool-row compact">
                   <span className="tool-label">굵기</span>
                   <span className="tool-hint">현재 {brushSize}px</span>
@@ -756,10 +1016,78 @@ function App() {
             </div>
           </article>
 
-          <article className="panel-card chat-card">
+          {isCompactLayout && game.phase === 'lobby' ? (
+            <article className="panel-card mobile-lobby-card">
+              <div className="panel-header">
+                <h3>게임 준비</h3>
+                <span className="muted-line">{game.players.length}명 참가 중</span>
+              </div>
+
+              {game.isHost ? (
+                <>
+                  <div className="host-controls-card">
+                    <div className="tool-row compact">
+                      <span className="tool-label">호스트 컨트롤</span>
+                      <span className="tool-hint">플레이어 2명 이상부터 시작 가능</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => socketRef.current?.emit('startGame')}
+                      disabled={!game.canStart}
+                    >
+                      게임 시작
+                    </button>
+                    <p className="muted-line">
+                      {game.canStart
+                        ? '준비가 끝났습니다. 누르면 바로 첫 라운드가 시작됩니다.'
+                        : '최소 2명이 모이면 게임을 시작할 수 있습니다.'}
+                    </p>
+                  </div>
+
+                  <div className="round-config-card">
+                    <div className="tool-row compact">
+                      <span className="tool-label">총 라운드 수</span>
+                      <span className="tool-hint">시작 전 호스트만 변경 가능</span>
+                    </div>
+                    <div className="round-option-grid">
+                      {ROUND_OPTIONS.map((roundOption) => (
+                        <button
+                          key={roundOption}
+                          type="button"
+                          className={game.maxRounds === roundOption ? 'size-chip active' : 'size-chip'}
+                          onClick={() => handleRoundChange(roundOption)}
+                          disabled={roundUpdatePending === roundOption}
+                        >
+                          {roundUpdatePending === roundOption ? '적용 중' : `${roundOption}R`}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="muted-line round-feedback-line">
+                      {roundUpdateMessage || `현재 ${game.maxRounds}라운드`}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="player-status-card">
+                  <span className="tool-label">대기 중</span>
+                  <p className="muted-line">호스트가 라운드 수를 정하고 게임을 시작하면 바로 입장합니다.</p>
+                </div>
+              )}
+            </article>
+          ) : null}
+
+          <article className={isCompactLayout ? 'panel-card chat-card mobile-chat-card' : 'panel-card chat-card'} ref={chatCardRef}>
             <div className="panel-header">
-              <h3>채팅 / 정답</h3>
-              <span className="muted-line">{connectionLabel}</span>
+              <div className="chat-header-copy">
+                <h3>채팅 / 정답</h3>
+                <span className="muted-line">{connectionLabel}</span>
+              </div>
+              {isCompactLayout ? (
+                <button type="button" className="ghost-button chat-nav-button" onClick={handleBoardJump}>
+                  그림으로 복귀
+                </button>
+              ) : null}
             </div>
 
             <div className="message-list" ref={messagesRef}>
@@ -773,9 +1101,10 @@ function App() {
 
             <form className="chat-form" onSubmit={handleMessageSubmit}>
               <input
+                ref={chatInputRef}
                 value={draftMessage}
                 onChange={(event) => setDraftMessage(event.target.value)}
-                placeholder={canDraw ? '채팅으로 힌트를 주지는 마세요' : '정답 또는 채팅 입력'}
+                placeholder={canDraw ? '채팅으로 힌트를 주지는 마세요' : game.hasGuessedCorrectly ? '정답을 맞혔습니다. 필요하면 넘기기를 눌러 주세요' : '정답 또는 채팅 입력'}
                 maxLength={80}
               />
               <button type="submit" className="primary-button">
@@ -784,6 +1113,7 @@ function App() {
             </form>
           </article>
 
+          {!isCompactLayout ? (
           <article className="panel-card player-card">
             <div className="panel-header">
               <h3>플레이어</h3>
@@ -859,6 +1189,7 @@ function App() {
               ))}
             </ul>
           </article>
+          ) : null}
         </section>
       ) : null}
     </main>
