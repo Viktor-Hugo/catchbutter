@@ -149,7 +149,12 @@ function getResultTone(game) {
 }
 
 function isCorrectRoundEnd(game) {
-  return game.phase === 'round-end' && game.resultText.includes('정답!')
+  return (
+    game.phase === 'round-end' &&
+    (game.resultText.includes('정답!') ||
+      game.resultText.includes('정답을 맞혀') ||
+      game.resultText.includes('모든 참가자가 정답'))
+  )
 }
 
 function hexToRgba(hexColor) {
@@ -528,6 +533,31 @@ function App() {
         '',
         buildRoomLocation(nextState.roomCode, window.location.hash === LEAVE_GUARD_HASH),
       )
+    })
+
+    socket.on('roomTick', (nextTick) => {
+      if (!nextTick || typeof nextTick !== 'object') {
+        return
+      }
+
+      setGame((previousGame) => {
+        if (!previousGame.roomCode) {
+          return previousGame
+        }
+
+        if (previousGame.phase !== nextTick.phase && typeof nextTick.phase === 'string') {
+          return previousGame
+        }
+
+        if (previousGame.timeLeft === nextTick.timeLeft) {
+          return previousGame
+        }
+
+        return {
+          ...previousGame,
+          timeLeft: nextTick.timeLeft,
+        }
+      })
     })
 
     socket.on('canvasState', (segments) => {

@@ -22,9 +22,15 @@ const DEFAULT_ROUNDS = 6
 const ROUND_OPTIONS = [2, 3, 4, 5, 6, 8, 10]
 const MAX_ROUNDS = ROUND_OPTIONS[ROUND_OPTIONS.length - 1] || DEFAULT_ROUNDS
 const MAX_MESSAGES = 40
+const MAX_CANVAS_SEGMENTS = 3000
 const CORRECT_GUESS_POINTS = 60
 const DRAWER_CORRECT_BONUS = 30
 const rooms = new Map()
+const UNIQUE_WORDS = Array.from(new Set(WORDS))
+
+if (UNIQUE_WORDS.length !== WORDS.length) {
+  console.warn(`[words] Duplicate entries removed at runtime: ${WORDS.length - UNIQUE_WORDS.length}`)
+}
 
 const app = express()
 app.use(cors())
@@ -76,7 +82,7 @@ function createMessage(type, sender, text) {
 }
 
 function createWordDeck() {
-  const deck = [...WORDS]
+  const deck = [...UNIQUE_WORDS]
 
   for (let index = deck.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(Math.random() * (index + 1))
@@ -104,14 +110,18 @@ function pickWord(room) {
     room.wordDeck = createWordDeck()
   }
 
-  return room.wordDeck.pop() || WORDS[0] || '정답'
+  return room.wordDeck.pop() || UNIQUE_WORDS[0] || '정답'
 }
 
 function pickWordChoices(room, count = 3) {
   const choices = []
   const usedWords = new Set()
+  const targetCount = Math.max(1, Math.min(Number(count) || 1, UNIQUE_WORDS.length || 1))
+  const attemptLimit = Math.max(targetCount * 4, UNIQUE_WORDS.length * 2)
+  let attempts = 0
 
-  while (choices.length < count) {
+  while (choices.length < targetCount && attempts < attemptLimit) {
+    attempts += 1
     const nextWord = pickWord(room)
 
     if (usedWords.has(nextWord)) {
@@ -120,6 +130,21 @@ function pickWordChoices(room, count = 3) {
 
     usedWords.add(nextWord)
     choices.push(nextWord)
+  }
+
+  if (choices.length < targetCount) {
+    for (const fallbackWord of createWordDeck()) {
+      if (choices.length >= targetCount) {
+        break
+      }
+
+      if (usedWords.has(fallbackWord)) {
+        continue
+      }
+
+      usedWords.add(fallbackWord)
+      choices.push(fallbackWord)
+    }
   }
 
   return choices
@@ -260,6 +285,17 @@ function serializeRoomForPlayer(room, playerId) {
 function emitRoomState(room) {
   room.players.forEach((player) => {
     io.to(player.id).emit('roomState', serializeRoomForPlayer(room, player.id))
+  })
+}
+
+function emitRoomTick(room) {
+  const payload = {
+    phase: room.phase,
+    timeLeft: room.timeLeft,
+  }
+
+  room.players.forEach((player) => {
+    io.to(player.id).emit('roomTick', payload)
   })
 }
 
@@ -616,6 +652,11 @@ io.on('connection', (socket) => {
           }
 
     room.segments.push(sanitizedSegment)
+
+    if (room.segments.length > MAX_CANVAS_SEGMENTS) {
+      room.segments.splice(0, room.segments.length - MAX_CANVAS_SEGMENTS)
+    }
+
     socket.to(room.code).emit('canvasAction', sanitizedSegment)
   })
 
@@ -698,7 +739,7 @@ setInterval(() => {
 
       if (nextTimeLeft !== room.timeLeft) {
         room.timeLeft = nextTimeLeft
-        emitRoomState(room)
+        emitRoomTick(room)
       }
 
       if (room.chooseEndsAt <= now) {
